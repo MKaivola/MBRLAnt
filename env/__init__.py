@@ -20,4 +20,5 @@ register(
 
 register(
     id='MBRLAnt-v0',
-    entry_point='env.ant_MBRL:AntEnv')
+    entry_point='env.ant_MBRL:AntEnv',
+    max_episode_steps=200)

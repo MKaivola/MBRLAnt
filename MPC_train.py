@@ -1,5 +1,5 @@
 import argparse
-from realant_dynamics_train import RealAnt_Instance
+from MPC_instance import Train_Instance
 import torch.multiprocessing as mp
 import itertools
 
@@ -21,10 +21,8 @@ parser.add_argument('--env_name', type=str, required=True,
 # Dynamics hyperparameters
 parser.add_argument('--model', type=str, default='Determ', choices=['Determ', 'PETS'],
                     help='Dynamics model used')
-parser.add_argument('--n_epochs_dyn', type=int, default=100,
+parser.add_argument('--n_epochs_dyn', type=int, default=200,
                     help='Number of training epochs per episode for dynamics')
-parser.add_argument('--n_step_loss', type=int, default=1,
-                        help='How many steps the dynamics model is propagated when calculating loss')
 parser.add_argument('--n_epoch_decay_dyn', type=float, default=1.0,
                     help='Decay factor of number of training epochs')
 
@@ -36,19 +34,19 @@ parser.add_argument('--action_smooth', type=float, default=0.0,
                         help='Action noise smoothing coefficient')
 parser.add_argument('--regularization', type=str, default='None', choices=['None', 'DAE', 'DEEN', 'RND'],
                     help='Regularization method in planning')
-parser.add_argument('--n_epochs_reg', type=int, default=100,
+parser.add_argument('--n_epochs_reg', type=int, default=200,
                     help='Number of training epochs per episode for regularizer')
 parser.add_argument('--reg_noise_std', type=float, default=0.3,
                     help='Std of gaussian noise added to inputs in regularization')
-parser.add_argument('--reg_alpha', type=float, default=0.045,
+parser.add_argument('--reg_alpha', type=float, default=0.001,
                     help='Penalty scaling term for regularization')
 parser.add_argument('--n_epoch_decay_reg', type=float, default=1.0,
                     help='Decay factor of number of training epochs')
 
 # Training loop hyperparameters
-parser.add_argument('--n_data_episodes', type=int, default=40,
+parser.add_argument('--n_data_episodes', type=int, default=30,
                     help='Number of data collection episodes')
-parser.add_argument('--n_random_episodes', type=int, default=5,
+parser.add_argument('--n_random_episodes', type=int, default=10,
                     help='Number of random initial episodes')
 parser.add_argument('--TD3_init', action='store_true', 
                     help='Use TD3 trajectories as initial data')
@@ -75,7 +73,7 @@ if __name__ == '__main__':
     
     pool = mp.Pool(processes=mp.cpu_count())
     
-    train_instances = [RealAnt_Instance((seed, args)) for seed in seeds]
+    train_instances = [Train_Instance((seed, args)) for seed in seeds]
     
     pool.map(start_training, zip(train_instances, 
                                   itertools.repeat(args.n_data_episodes, len(train_instances)),
@@ -89,7 +87,7 @@ if __name__ == '__main__':
     else:
         prepend_str = '_' + args.regularization
         
-    output_dir = args.env_name + '_{}_n_step_loss_{}_horizon_{}_act_smooth_{}_dyn_epochs_{}_epoch_decay_{}'.format(args.model, args.n_step_loss, args.horizon,
+    output_dir = args.env_name + '_{}_horizon_{}_act_smooth_{}_dyn_epochs_{}_epoch_decay_{}'.format(args.model, args.horizon,
                                                                          args.action_smooth, args.n_epochs_dyn, args.n_epoch_decay_dyn) + prepend_str
     if args.TD3_init:
         output_dir += '_TD3_init'
@@ -102,14 +100,25 @@ if __name__ == '__main__':
             f'reg_epochs_{args.n_epochs_reg}_epoch_decay_{args.n_epoch_decay_reg}'
                 
     returns = []
-    plt.figure(figsize = (19.2, 10.8))
+    f, ax = plt.subplots(figsize = (19.2, 10.8))
 
     for seed in seeds:
         data = np.load(output_dir + f'/seed_{seed}/MPC_data.npy')
         returns.append(data)
     
     returns = np.stack(returns, axis = 1)
-    plt.plot(returns)
-    plt.xlabel('Episode')
-    plt.ylabel('Return')
-    plt.savefig(os.path.join(output_dir, 'performance.pdf'))
+    episode_steps = np.arange(start = 0, stop = (returns.shape[0]) * 1, step = 1)
+    
+    mean_return = np.mean(returns, axis = 1)
+    ax.plot(episode_steps, mean_return, label = f'{args.model} ({args.regularization})')
+    
+    std_return = np.std(returns, axis = 1, ddof = 1)
+    
+    ax.fill_between(episode_steps, mean_return + std_return, mean_return - std_return, alpha = 0.2)
+    
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('Return')
+    ax.grid(b = True)
+    f.tight_layout()
+    plt.legend()
+    plt.savefig(os.path.join(output_dir, 'Performance.pdf'))

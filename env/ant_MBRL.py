@@ -27,7 +27,7 @@ class AntEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         #     np.square(np.clip(self.sim.data.cfrc_ext, -1, 1)))
         survive_reward = 1.0
         # reward = forward_reward - ctrl_cost - contact_cost + survive_reward
-        reward = forward_reward + survive_reward #- ctrl_cost
+        reward = forward_reward + survive_reward - ctrl_cost
         
         state = self.state_vector()
         notdone = np.isfinite(state).all()  \

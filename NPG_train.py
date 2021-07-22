@@ -46,8 +46,8 @@ def start_training(fargs):
     
 if __name__ == '__main__':
     args = parser.parse_args()
-    # seeds = [0, 2, 51]#, 754]#, 6745]
-    seeds = [3]
+    # seeds = [0, 2]#, 754]#, 6745]
+    seeds = [101]
     
     # mp.set_start_method('spawn')
     
@@ -69,10 +69,26 @@ if __name__ == '__main__':
     for seed in seeds:
         data = np.load(output_dir + f'/seed_{seed}/Perf_data.npy')
         returns.append(data)
-    
+
     returns = np.stack(returns, axis = 1)
     plt.plot(returns)
     plt.plot(np.mean(returns, axis = 1), linestyle='dashed')
     plt.xlabel('Episode')
     plt.ylabel('Return')
     plt.savefig(os.path.join(output_dir, 'performance.pdf'))
+    
+    # plt.figure(figsize = (19.2, 10.8))
+    
+    # model_losses = np.load(output_dir + f'/seed_{seeds[0]}/Model_loss_legs.npy')
+    # plt.plot(model_losses)
+    # plt.xlabel('Episode')
+    # plt.ylabel('MSE Loss')
+    # plt.savefig(os.path.join(output_dir, 'model_losses_legs.pdf'))
+    
+    # plt.figure(figsize = (19.2, 10.8))
+    
+    # model_losses = np.load(output_dir + f'/seed_{seeds[0]}/Model_loss_pose.npy')
+    # plt.plot(model_losses)
+    # plt.xlabel('Episode')
+    # plt.ylabel('MSE Loss')
+    # plt.savefig(os.path.join(output_dir, 'model_losses_pose.pdf'))

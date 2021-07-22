@@ -17,7 +17,7 @@ from td3 import TD3
 from eff_locomotion import DETNET
 from pets import PETS
 
-class RealAnt_Instance():
+class Train_Instance():
     
     def __init__(self, fargs):
         seed, args = fargs
@@ -65,7 +65,7 @@ class RealAnt_Instance():
         else:
             prepend_str = '_' + args.regularization
         
-        self.output_dir = args.env_name + '_{}_n_step_loss_{}_horizon_{}_act_smooth_{}_dyn_epochs_{}_epoch_decay_{}'.format(args.model, args.n_step_loss, args.horizon,
+        self.output_dir = args.env_name + '_{}_horizon_{}_act_smooth_{}_dyn_epochs_{}_epoch_decay_{}'.format(args.model, args.horizon,
                                                                          args.action_smooth, args.n_epochs_dyn, args.n_epoch_decay_dyn) + prepend_str
         if args.TD3_init:
             self.output_dir += '_TD3_init'
@@ -81,47 +81,15 @@ class RealAnt_Instance():
         
         os.makedirs(self.output_dir, mode = 0o755, exist_ok = True)
         
-        if 'MBRLCartpole' in args.env_name:
-            self.model = DETNET(state_size + action_size, state_size, args.n_step_loss, action_size,
+        if "RealAntMujoco" in args.env_name:
+            env_spec = env_specs.env_funcs.RealAntMujoco(args.task, args.latency, args.min_obs_stack)
+        else:
+            Exception("No such env defined")
+        
+        if args.model == 'Determ':
+            self.model = DETNET(state_size + action_size, 28, action_size,
                               min_action, max_action,
-                              env_specs.env_funcs.MBRLCartpole(),
-                              self.device, args.env_name,
-                              seed, args.task, args.latency, args.xyz_noise_std, args.rpy_noise_std, args.min_obs_stack,
-                              horizon = args.horizon,
-                              population_size = 500,
-                              elite_size = 50,
-                              hidden_size_dyn = 200,
-                              hidden_size_reg = 200,
-                              filter_coeff = 0.0,
-                              lr = 0.001,
-                              holdout_ratio = 0,
-                              n_cem_iterations = 5,
-                              reg = args.regularization,
-                              reg_alpha = args.reg_alpha,
-                              reg_noise_std = args.reg_noise_std)
-        if 'MBRLAnt' in args.env_name:
-            self.model = DETNET(state_size + action_size, state_size, args.n_step_loss, action_size,
-                              min_action, max_action,
-                              env_specs.env_funcs.MBRLAnt(),
-                              self.device, args.env_name,
-                              seed, args.task, args.latency, args.xyz_noise_std, args.rpy_noise_std, args.min_obs_stack,
-                              horizon = args.horizon,
-                              population_size = 500,
-                              elite_size = 50,
-                              hidden_size_dyn = 200,
-                              hidden_size_reg = 200,
-                              filter_coeff = args.action_smooth,
-                              lr = 0.001,
-                              holdout_ratio = 0,
-                              n_cem_iterations = 5,
-                              reg = args.regularization,
-                              reg_alpha = args.reg_alpha,
-                              reg_noise_std = args.reg_noise_std)
-        elif 'RealAntMujoco-v0' in args.env_name:
-            if args.model == 'Determ':
-                self.model = DETNET(state_size + action_size, 29, args.n_step_loss, action_size,
-                              min_action, max_action,
-                              env_specs.env_funcs.RealAntMujoco(args.task, args.latency, args.min_obs_stack),
+                              env_spec,
                               self.device, args.env_name,
                               seed, args.task, args.latency, args.xyz_noise_std, args.rpy_noise_std, args.min_obs_stack,
                               horizon = args.horizon,
@@ -131,15 +99,14 @@ class RealAnt_Instance():
                               hidden_size_reg = 256,
                               filter_coeff = args.action_smooth,
                               lr = 0.001,
-                              holdout_ratio = 0,
                               n_cem_iterations = 5,
                               reg = args.regularization,
                               reg_alpha = args.reg_alpha,
                               reg_noise_std = args.reg_noise_std)
-            else:
-                self.model = PETS(state_size + action_size, 29, action_size,
+        else:
+            self.model = PETS(state_size + action_size, 29, action_size,
                              min_action, max_action,
-                             env_specs.env_funcs.RealAntMujoco(args.task, args.latency, args.min_obs_stack),
+                             env_spec,
                              self.device,
                              horizon = args.horizon,
                              population_size = 500,
@@ -150,23 +117,23 @@ class RealAnt_Instance():
                              holdout_ratio = 0,
                              n_cem_iterations = 7)
         
-        # self.agent = TD3(self.device, state_size, action_size)
-        # self.agent.load_model('td3_model_699.pt')
+        self.agent = TD3(self.device, state_size, action_size)
+        self.agent.load_model('td3_model_699_Quart.pt')
         
         self.args = args
 
-    def execute_action_seq(self, env, action_seq, n_executions = 10):
-        ep_returns = []
-        for _ in range(n_executions):
-            env.reset()
-            ep_return = 0
-            for i in range(action_seq.shape[0]):
-                _, reward, _, _ = env.step(action_seq[i, :])
-                ep_return += reward
-            ep_returns.append(ep_return)
-        return np.mean(ep_returns), np.std(ep_returns, ddof=1)
+    # def execute_action_seq(self, env, action_seq, n_executions = 10):
+    #     ep_returns = []
+    #     for _ in range(n_executions):
+    #         env.reset()
+    #         ep_return = 0
+    #         for i in range(action_seq.shape[0]):
+    #             _, reward, _, _ = env.step(action_seq[i, :])
+    #             ep_return += reward
+    #         ep_returns.append(ep_return)
+    #     return np.mean(ep_returns), np.std(ep_returns, ddof=1)
         
-    def evaluate_MPC(self, ep, horizon, n_episodes = 3):
+    def evaluate_MPC(self, ep, horizon, n_episodes = 5):
         returns = []
         for ep_ind in range(n_episodes):
             state = self.env_eval.reset()
@@ -182,6 +149,7 @@ class RealAnt_Instance():
             
             for _ in range(self.args.ep_len):
                 action = self.model.act(state, evaluation = True)
+                # action = self.agent.act(state, train = True)
                 
                 next_state, reward, done, _ = self.env_eval.step(action)
                 ep_return += reward
@@ -208,21 +176,23 @@ class RealAnt_Instance():
             states = np.stack(states)
             pred_states = np.stack(pred_states)
             
-            # if ep_ind == n_episodes - 1:
-            #     with PdfPages(os.path.join(self.output_dir, f'MPC_predictions_ep_{ep}.pdf')) as pdf:
-            #         for dim in range(state.shape[0]):
-            #             plt.figure(figsize = (10, 10))
-            #             plt.plot(states[:, dim])
-            #             plt.plot(pred_states[:, dim])
-            #             plt.xlabel('Env step')
-            #             plt.ylabel(f'Dimension {dim}')
-            #             plt.title('Dynamics model performance ({} epochs)'.format(ep))
-            #             pdf.savefig()
-            #             plt.close()
-            
+            if ep_ind == n_episodes - 1:
+                with PdfPages(os.path.join(self.output_dir, f'MPC_predictions_ep_{ep}.pdf')) as pdf:
+                    for dim in range(state.shape[0]):
+                        plt.figure(figsize = (10, 10))
+                        plt.plot(states[:, dim])
+                        plt.plot(pred_states[:, dim])
+                        plt.xlabel('Env step')
+                        plt.ylabel(f'Dimension {dim}')
+                        plt.title('Dynamics model performance ({} episodes)'.format(ep))
+                        pdf.savefig()
+                        plt.close()
+        
+        print(f"Mean return after {ep} episodes: {np.mean(returns)} ")
+        
         return np.mean(returns)
     
-    def evaluate_dynamics(self, ep, horizon, eval_int_len = 200):
+    def evaluate_dynamics(self, ep, horizon):
         state = self.env_eval.reset()
         pred_state = state.copy()
         states = [state]
@@ -230,7 +200,7 @@ class RealAnt_Instance():
         
         step = 0
         
-        for _ in range(eval_int_len):
+        for _ in range(self.args.ep_len):
             action = self.agent.act(state, train = True, noise = 0.3)
             
             next_state, reward, done, _ = self.env_eval.step(action)
@@ -265,11 +235,13 @@ class RealAnt_Instance():
                 pdf.savefig()
                 plt.close()
     
-    def run_training(self, n_episodes, n_random_eps = 10, model_train_freq = 1):
+    def run_training(self, n_episodes, n_random_eps = 10):
 
         returns_MPC = []
         n_epochs_dyn = self.args.n_epochs_dyn
         n_epochs_reg = self.args.n_epochs_reg
+        
+        returns_MPC.append(self.evaluate_MPC(0, 1))
         
         for ep in range(n_episodes):
             state = self.env.reset()
@@ -277,12 +249,12 @@ class RealAnt_Instance():
             
             self.model.reset()
         
-            if ep >= n_random_eps and (ep + 1) & model_train_freq == 0:
-                self.model.train_models(n_epochs_dyn = n_epochs_dyn, batch_size_dyn = 32,
-                                        n_epochs_reg = n_epochs_reg, batch_size_reg = 32)
+            if ep >= n_random_eps:
+                self.model.train_models(n_epochs_dyn = n_epochs_dyn, batch_size_dyn = 200,
+                                        n_epochs_reg = n_epochs_reg, batch_size_reg = 200)
                 n_epochs_dyn = int(max(5, n_epochs_dyn * self.args.n_epoch_decay_dyn))
                 n_epochs_reg = int(max(5, n_epochs_reg * self.args.n_epoch_decay_reg))
-            returns_MPC.append(self.evaluate_MPC(ep, self.args.horizon))
+                returns_MPC.append(self.evaluate_MPC(ep, 1))
             # self.evaluate_dynamics(ep, self.args.horizon)
             
             for _ in range(self.args.ep_len):
@@ -296,16 +268,11 @@ class RealAnt_Instance():
                     action = self.agent.act(state, train = True) if self.args.TD3_init else self.env.action_space.sample()
                 
                 next_state, reward, done, _ = self.env.step(action)
-                if 'Determ' in self.args.model:
-                    self.model.save_transition(state, action, False, reward)
-                else:
-                    self.model.save_transition(state, action, next_state, reward)
+                self.model.save_transition(state, action, next_state)
                 
                 state = next_state
                 
                 if done:
-                    if 'Determ' in self.args.model:
-                        self.model.save_transition(state, self.env.action_space.sample(), True, 0)
                     break
         
         np.save(os.path.join(self.output_dir, 'MPC_data'), np.array(returns_MPC))

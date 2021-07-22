@@ -14,8 +14,7 @@ class Swish(nn.Module):
 
 class DAE_NET(nn.Module):
     def __init__(self, 
-                 input_size, 
-                 code_size,
+                 input_size,
                  device,
                  hidden_size,
                  lr,
@@ -32,14 +31,6 @@ class DAE_NET(nn.Module):
                                   # nn.Linear(hidden_size, hidden_size),
                                   # Swish(),
                                   nn.Linear(hidden_size, input_size))
-        
-        # self.decoder = nn.Sequential(nn.Linear(code_size, hidden_size),
-        #                               Swish(),
-        #                               nn.Linear(hidden_size, hidden_size),
-        #                               Swish(),
-        #                               nn.Linear(hidden_size, hidden_size),
-        #                               Swish(),
-        #                               nn.Linear(hidden_size, input_size))
         for m in self.modules():
             if type(m) is nn.Linear:
                 nn.init.xavier_normal_(m.weight)
@@ -48,13 +39,11 @@ class DAE_NET(nn.Module):
         # Input scaler parameters
         self.mu = nn.Parameter(torch.zeros((1, input_size)), requires_grad = False)
         self.sigma = nn.Parameter(torch.ones((1, input_size)), requires_grad = False)
-                        
+                                
         self.input_size = input_size
-        self.code_size = code_size
         
         self.device = device
         self.optim = optim.Adam(self.encoder.parameters(), lr = lr)
-        # self.optim = optim.Adam(list(self.encoder.parameters()) + list(self.decoder.parameters()) , lr = lr)
         
         self.env_spec = env_spec
         
@@ -66,22 +55,17 @@ class DAE_NET(nn.Module):
             
         encoded = self.encoder(comb)
         
-        decoded = encoded #self.decoder(encoded)
+        decoded = encoded
                             
         return decoded
                                 
     def update_parameters(self, replay_buffer, n_epochs = 5, batch_size = 32):
         
-        # Shape: 0: Obs 1: n_step Index 2: Dim
+        # Shape: 0: Obs 1: Dim
                 
-        state_seq, action_seq = [np.array(t) for 
+        states, actions, next_states = [np.array(t) for 
                                       t in zip(*replay_buffer)]
-        
-        # states = state_seq[:, 0, :]
-        actions = action_seq[:, 0, :]
-        
-        states = state_seq[:, 0:2, :]
-        
+                
         n = states.shape[0]
                 
         # Shape: 0: Obs Index
@@ -90,8 +74,8 @@ class DAE_NET(nn.Module):
         
         n_train = n 
         
-        inputs = np.concatenate((self.env_spec.state_preproc(states[:, 0, :]), actions, 
-                                 self.env_spec.state_preproc(states[:, 1, :])), axis = 1)
+        inputs = np.concatenate((self.env_spec.state_preproc(states), actions, 
+                                 self.env_spec.state_preproc(next_states) ), axis = 1)
         
         mu = np.mean(inputs, axis = 0, keepdims = True)
         sigma = np.std(inputs, axis = 0, keepdims = True)
@@ -106,11 +90,12 @@ class DAE_NET(nn.Module):
                 
                 batch_ind = train_set_ind[batch_n * batch_size:(batch_n + 1) * batch_size]
                                                 
-                states_batch = states[batch_ind, :, :]
+                states_batch = states[batch_ind, :]
                 actions_batch = actions[batch_ind, :]
+                next_states_batch = next_states[batch_ind, :]
                 
-                inputs = np.concatenate((self.env_spec.state_preproc(states_batch[:, 0, :]), actions_batch,
-                                         self.env_spec.state_preproc(states_batch[:, 1, :])), axis = 1)
+                inputs = np.concatenate((self.env_spec.state_preproc(states_batch), actions_batch,
+                                         self.env_spec.state_preproc(next_states_batch)), axis = 1)
                 inputs = torch.FloatTensor(inputs).to(self.device)
                 
                 inputs = (inputs - self.mu)/self.sigma

@@ -73,6 +73,10 @@ class RealAntMujoco:
     def not_done(self, states, device):
         not_dones = torch.ones(states.shape[:2], device = device)
         
+        # not_dones[torch.logical_or(states[:, :, 3] < 0.063, states[:, :, 3] > 0.31)] = 0.0
+        
+        # not_dones = torch.cumprod(not_dones, dim = 1)
+        
         return not_dones
         
     def reward_fun(self, actions, next_states):
@@ -112,7 +116,7 @@ class MBRLAnt:
         # contact_cost = 0.5 * 1e-3 * torch.sum(
         #     torch.clamp(next_states[:, -84:], min = -1, max = 1) ** 2)
         survive_reward = 1.0
-        reward = forward_reward + survive_reward #- ctrl_cost
+        reward = forward_reward + survive_reward - ctrl_cost
         
         return reward
         

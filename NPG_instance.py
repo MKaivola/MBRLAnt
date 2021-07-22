@@ -11,9 +11,11 @@ import os
 import env as env_specs
 from NPG import NPG_Agent
 from SAC_MB import SAC
-from NPG_model import NPG_Model
+from NPG_model_separate import NPG_Model
 
 from collections import deque
+
+from td3 import TD3
 
 def enforce_tensor_bounds(torch_tensor, min_val=None, max_val=None, 
                           large_value=float(1e2), device=None):
@@ -105,10 +107,30 @@ class Train_Instance():
                     
         if 'MBRLAnt' in args.env_name:
             self.env_spec = env_specs.env_funcs.MBRLAnt()
+            self.max_val = torch.ones(state_size).to(self.device) * 100
+            self.min_val = self.max_val * -1.0
         elif 'MBRLCartpole' in args.env_name:
             self.env_spec = env_specs.env_funcs.MBRLCartpole()
         elif 'RealAntMujoco' in args.env_name:
             self.env_spec = env_specs.env_funcs.RealAntMujoco(args.task, args.latency, args.min_obs_stack)
+            self.max_val = torch.ones(state_size).to(self.device) * 20
+            self.min_val = self.max_val * -1.0
+            # self.max_val = torch.tensor([0.04, 0.04, 0.02,
+            #                          0.25, 6.5, 0.2, 0.25,
+            #                          0.1, 0.15, 0.6, -0.98,
+            #                          1.05, 1.05, -0.35,
+            #                          2.0, 0.71, 0.2, -0.15,
+            #                          0.5, 0.71, 2.1, 1.5, 
+            #                          15.0, 2.0, 4.0, 2.0,
+            #                          4.0, 2.1, 5.0]).to(self.device)
+            # self.min_val = torch.tensor([-0.04, -0.04, -0.05,
+            #                          0.12, -6.5, -0.2, -0.25,
+            #                          -0.2, -0.25, -0.6, -1.01,
+            #                          0.980, 0.8, -0.71,
+            #                          -0.7, 0.1, -1.9, -0.71,
+            #                          -2.1, 0.25, 0.0, -2.0, 
+            #                          -3.0, -1.5, -12.5, -3.0,
+            #                          -12.0, -1.5, -5.0]).to(self.device)
         else:
             Exception("No such env spec exists")
                 
@@ -122,14 +144,19 @@ class Train_Instance():
         
         self.seed = seed
         
-    def evaluate_policy(self, n_samples_collected, n_episodes = 3):
+        self.agent = TD3(self.device, state_size, action_size)
+        self.agent.load_model('td3_model_699.pt')
+        
+     
+    def evaluate_policy(self, n_samples_collected, n_episodes = 10):
         returns = []
         for ep in range(n_episodes):
             state = self.env_eval.reset()
             return_ep = 0
             done = False
             for _ in range(self.args.ep_len):
-                action = self.agent.sample_action(state, evaluate = True)
+                # action = self.agent.sample_action(state, evaluate = True)
+                action = self.agent.act(state, train = False)
                 state, reward, done, _ = self.env_eval.step(action)
                 return_ep += reward
                 if done:
@@ -149,46 +176,104 @@ class Train_Instance():
         pred_states = [pred_state]
         actions = []
         
-        horizon = 1
+        horizons = [15]
         step = 0
                 
         for _ in range(self.args.ep_len):
-            action = self.agent.sample_action(state, evaluate = True)
+            # action = self.agent.sample_action(state, evaluate = True)
+            action = self.agent.act(state, train = False)
             actions.append(action)
             
             next_state, reward, done, _ = self.env_eval.step(action)
             
             states.append(next_state)
             
-            pred_next_state = self.model.mean_prediction(pred_state, action)
+            # pred_next_state = self.model.mean_prediction(pred_state, action)
             
-            pred_states.append(pred_next_state)
+            # pred_next_state = pred_next_state.reshape(-1)
+            
+            # pred_states.append(pred_next_state)
             
             state = next_state
             
             if done:
                 break
             
-            step += 1
+            # step += 1
             
-            if step % horizon == 0:
-                pred_state = state
-            else:
-                pred_state = pred_next_state
+            # if step % horizon == 0:
+            #     pred_state = state
+            # else:
+            #     pred_state = pred_next_state
         
         states = np.stack(states)
-        pred_states = np.stack(pred_states)
+        pred_states = np.zeros((len(horizons), self.args.ep_len + 1, state.shape[0])) #np.stack(pred_states)
         actions = np.stack(actions)
         
+        for j, horizon in enumerate(horizons):
+        
+            pred_state_init = pred_state.reshape(1, -1)
+            
+            pred_states[j, 0, :] = pred_state
+            
+            # step = 0
+                        
+            for i in range(1, self.args.ep_len + 1):
+                pred_next_state = self.model.mean_prediction(pred_state_init, actions[i - 1, :][None, :])
+                pred_states[j, i, :] = pred_next_state[0, :]
+                # step += 1
+                
+                if i % horizon == 0:
+                    pred_state_init = states[i, :].reshape(1, -1)
+                    # pred_states[j, i, :] = states[i, :]
+                else:
+                    pred_state_init = pred_next_state
+                    # pred_states[j, i, :] = pred_next_state[0, :]
+                                
+            # states_start = states[1:(states.shape[0] - horizon), :]
+            
+            # for i in range(horizon):
+            #     pred_next_states = self.model.mean_prediction(states_start, actions[(1 + i):(actions.shape[0] - horizon + i + 1), :])
+            #     states_start = pred_next_states
+                
+            # pred_states[j, (horizon + 1):, :] = states_start
+            
+        # print(f"THese should be the same: {states[np.arange(0, 200 , 45), :]} \n {pred_states[0, np.arange(0, 200 , 45), :]}")
+        
+        hips = ['hip_pos_leg_'] * 4
+        knees = ['knee_pos_leg_'] * 4
+        hip_vel = ['hip_vel_leg_'] * 4
+        knee_vel = ['knee_vel_leg_'] * 4
+        leg_ind = ["1", "2", "3", "4"]
+        
+        names = np.concatenate([np.char.add(hips, leg_ind) ,np.char.add(knees, leg_ind),
+                                np.char.add(hip_vel, leg_ind), np.char.add(knee_vel, leg_ind)])
+        
+        hip_angle_inds = np.arange(13, 21, 2)
+        knee_angle_inds = hip_angle_inds + 1
+        hip_vel_inds = hip_angle_inds + 8
+        knee_vel_inds = hip_vel_inds + 1
+        
+        # hip_angle_inds = np.arange(8, 16, 2)
+        # knee_angle_inds = hip_angle_inds + 1
+        # hip_vel_inds = np.arange(22, 30, 2)
+        # knee_vel_inds = hip_vel_inds + 1
+        
+        indices = np.concatenate([hip_angle_inds, knee_angle_inds, 
+                                  hip_vel_inds, knee_vel_inds])
+        
         with PdfPages(os.path.join(self.output_dir, f'Model_predictions_{n_samples_collected}.pdf')) as pdf:
-            for dim in range(state.shape[0]):
+            for dim, name in zip(indices, names):
                 plt.figure(figsize = (10, 10))
-                plt.plot(states[:, dim])
-                plt.plot(pred_states[:, dim])
+                plt.plot(states[:, dim], label = 'Ground Truth')
+                for i, horizon in enumerate(horizons):
+                    plt.plot(pred_states[i, :, dim], label = f'{horizon}-step prediction')
+                [plt.axvline(x_, ymin = 0, ymax = 1, linestyle = '--', color = 'k', alpha = 0.3) for x_ in np.arange(0, 200 , 15)]
                 plt.xlabel('Env step')
                 plt.ylabel(f'Dimension {dim}')
-                plt.title('Dynamics model performance ({} samples)'.format(n_samples_collected))
-                plt.legend(['Ground Truth', 'Predicted'])
+                plt.title(f'{name}')
+                # plt.legend(['Ground Truth', 'Predicted'])
+                plt.legend()
                 pdf.savefig()
                 plt.close()
                 
@@ -224,9 +309,11 @@ class Train_Instance():
             state = env.reset()
             self.initial_state_buffer.append(state)
             done = False
-            for _ in range(self.args.ep_len):
-                self.interm_state_buffer.append(state)
-                action = self.agent.sample_action(state, evaluate = False)
+            for i in range(self.args.ep_len):
+                if i != 0:
+                    self.interm_state_buffer.append(state)
+                # action = self.agent.sample_action(state, evaluate = False)
+                action = self.agent.act(state, train = True, noise = 0.25)
                 next_state, reward, done, _ = env.step(action)
                 
                 self.model.save_transition(state, action, next_state, reward)
@@ -240,7 +327,7 @@ class Train_Instance():
             
         self.seed += 123
             
-    def generate_real_rollouts(self, num_trajectories = 100):
+    def generate_real_rollouts(self, num_trajectories = 30):
         state_traj, action_traj, log_prob_traj, entropy_traj, reward_traj, terminated = [], [], [], [], [], []
         
         for _ in range(num_trajectories):
@@ -275,7 +362,7 @@ class Train_Instance():
         return state_traj, action_traj, log_prob_traj, entropy_traj, reward_traj, terminated
         
             
-    def sim_rollout_gen(self):
+    def sim_rollout_gen(self, n_samples_collected):
         states, actions, log_probs, entropies, rewards= [], [], [], [], []
         
         # Sample initial states from the buffer (might need to sample intermediate states as well)
@@ -292,12 +379,13 @@ class Train_Instance():
             )
         else:
             env = gym.make(self.args.env_name)
+                
+        init_frac = 0.5
         
-        # init_states = random.choices(self.initial_state_buffer, k = int(self.args.n_rollouts * 0.5))
-        
-        init_states = np.array([env.reset() for _ in range(self.args.n_rollouts // 2)])
+        init_states = np.array([env.reset() for _ in range(int(self.args.n_rollouts * init_frac) + 1)])
         # init_states = np.array(random.choices(self.initial_state_buffer, k = self.args.n_rollouts // 2))
-        interm_states = np.array(random.choices(self.interm_state_buffer, k = self.args.n_rollouts // 2))
+        interm_states = np.array(random.sample(self.interm_state_buffer,
+                                               k = int(self.args.n_rollouts * (1 - init_frac)) + 1))
         
         state = np.concatenate([init_states, interm_states], axis = 0)
         state = torch.FloatTensor(state).to(self.device)
@@ -326,7 +414,7 @@ class Train_Instance():
             # The bug is here with the sample_model method, the predictions do not agree
             # Should work now
             next_state = self.model.sample_model(state, action)
-            next_state = enforce_tensor_bounds(next_state)
+            next_state = enforce_tensor_bounds(next_state, min_val = self.min_val, max_val = self.max_val)
             # print(f'Actual prediction: {next_state[4, :]} \n')
             states.append(next_state)
             
@@ -345,6 +433,16 @@ class Train_Instance():
         not_dones = self.env_spec.not_done(states, self.device)
         # avg_traj_len = not_dones.sum(-1).mean()
         # print(f"Mean trajectory len (sim): {avg_traj_len}")
+        
+        # with PdfPages(os.path.join(self.output_dir, f'Sim_rollout_{n_samples_collected}.pdf')) as pdf:
+        #     for dim in range(states.shape[-1]):
+        #         plt.figure(figsize = (10, 10))
+        #         plt.plot(states[-1, :, dim].cpu().numpy())
+        #         plt.xlabel('Env step')
+        #         plt.ylabel(f'Dimension {dim}')
+        #         plt.title('Random sim trajectory ({} samples)'.format(n_samples_collected))
+        #         pdf.savefig()
+        #         plt.close()
         
         state_traj_trunc = []
         action_traj_trunc = []
@@ -377,20 +475,32 @@ class Train_Instance():
         return state_traj_trunc, action_traj_trunc, log_prob_traj_trunc, entropy_traj_trunc,  \
                 reward_traj_trunc, terminated_traj
                     
-    def run_training(self, n_total_samples, n_initial_samples = 2500):
+    def run_training(self, n_total_samples, n_initial_samples = 100000):
         
         sample_counter = 0
         policy_perf = []
         policy_std = []
+        model_loss_legs = []
+        model_loss_pose = []
         
         policy_perf.append(self.evaluate_policy(sample_counter))
-        policy_std.append(self.agent.get_policy_std())
+        # policy_std.append(self.agent.get_policy_std())
         
         # Collect initial data
         print('Collecting initial data...')
         self.collect_data(n_initial_samples)
 
         sample_counter += n_initial_samples
+        
+        losses_leg = self.model.update_parameters()
+        
+        plt.figure(figsize = (19.2, 10.8))
+        plt.plot(losses_leg)
+        plt.xlabel('Epoch')
+        plt.ylabel('Mean negative log-likelihood')
+        plt.savefig(os.path.join(self.output_dir, 'losses_leg.pdf'))
+        
+        self.evaluate_dynamics(sample_counter)
         
         # for _ in range(50):
         #     states, actions, log_probs, entropies, rewards, terminated = self.generate_real_rollouts()
@@ -402,52 +512,58 @@ class Train_Instance():
         #     policy_perf.append(self.evaluate_policy(sample_counter))
         #     policy_std.append(self.agent.get_policy_std())
         
-        while sample_counter <= n_total_samples:
+        # while sample_counter <= n_total_samples:
             
-            # Train models
-            print('Training model...')
-            self.model.update_parameters()
-            # mu_state, sigma_state = self.model.get_state_stats()
-            # self.agent.update_state_stats(mu_state, sigma_state, sim = False)
+        #     # Train models
+        #     print('Training model...')
+        #     model_losses = self.model.update_parameters()
             
-            # self.evaluate_dynamics(sample_counter)
+        #     model_loss_legs.append(model_losses[0])
+        #     model_loss_pose.append(model_losses[1])
+        #     # mu_state, sigma_state = self.model.get_state_stats()
+        #     # self.agent.update_state_stats(mu_state, sigma_state, sim = False)
             
-            # NPG updates
-            print('Starting policy updates...')
-            for _ in range(self.args.n_NPG_updates):
-                # Generate synthetic trajectories
-                states, actions, log_probs, entropies, rewards, terminated = self.sim_rollout_gen()
-                print('Rollouts done.')
-                # Update policy
-                self.agent.update_policy(states, actions,
-                          log_probs, entropies, rewards, terminated)
-                print('Policy Updated.')
-                # Update value function
-                if 'NPG' in self.args.policy_alg:
-                    self.agent.update_value(states, rewards, log_probs, terminated)
-                print('Value function updated.')
+        #     # self.evaluate_dynamics(sample_counter)
+            
+        #     # NPG updates
+        #     # print('Starting policy updates...')
+        #     # for _ in range(self.args.n_NPG_updates):
+        #     #     # Generate synthetic trajectories
+        #     #     states, actions, log_probs, entropies, rewards, terminated = self.sim_rollout_gen(sample_counter)
+        #     #     print('Rollouts done.')
+        #     #     # Update policy
+        #     #     self.agent.update_policy(states, actions,
+        #     #               log_probs, entropies, rewards, terminated)
+        #     #     print('Policy Updated.')
+        #     #     # Update value function
+        #     #     if 'NPG' in self.args.policy_alg:
+        #     #         self.agent.update_value(states, rewards, log_probs, terminated)
+        #     #     print('Value function updated.')
                 
-            self.evaluate_dynamics(sample_counter)
+        #     self.evaluate_dynamics(sample_counter)
                         
-            # Evaluate new policy
-            policy_perf.append(self.evaluate_policy(sample_counter))
-            policy_std.append(self.agent.get_policy_std())
+        #     # # Evaluate new policy
+        #     policy_perf.append(self.evaluate_policy(sample_counter))
+        #     # policy_std.append(self.agent.get_policy_std())
             
-            # Collect data under new policy
-            print('Collecting data...')
-            self.collect_data(self.args.n_iter_samples)
+        #     # Collect data under new policy
+        #     print('Collecting data...')
+        #     self.collect_data(self.args.n_iter_samples)
             
-            sample_counter += self.args.n_iter_samples
+        #     sample_counter += self.args.n_iter_samples
         
-        np.save(os.path.join(self.output_dir, 'Perf_data'), np.array(policy_perf))
-        policy_std = np.stack(policy_std, axis = 0)
-        with PdfPages(os.path.join(self.output_dir, 'std_trajectories.pdf')) as pdf:
-            for dim in range(policy_std.shape[1]):
-                plt.figure(figsize = (10, 10))
-                plt.plot(policy_std[:, dim])
-                plt.xlabel('Episode')
-                plt.ylabel(f'Action dimension {dim}')
-                plt.title('Policy standard deviation trajectory')
-                pdf.savefig()
-                plt.close()
+        # np.save(os.path.join(self.output_dir, 'Perf_data'), np.array(policy_perf))
+        
+        # np.save(os.path.join(self.output_dir, 'Model_loss_legs'), np.stack(model_loss_legs, axis = 0))
+        # np.save(os.path.join(self.output_dir, 'Model_loss_pose'), np.stack(model_loss_pose, axis = 0))
+        # policy_std = np.stack(policy_std, axis = 0)
+        # with PdfPages(os.path.join(self.output_dir, 'std_trajectories.pdf')) as pdf:
+        #     for dim in range(policy_std.shape[1]):
+        #         plt.figure(figsize = (10, 10))
+        #         plt.plot(policy_std[:, dim])
+        #         plt.xlabel('Episode')
+        #         plt.ylabel(f'Action dimension {dim}')
+        #         plt.title('Policy standard deviation trajectory')
+        #         pdf.savefig()
+        #         plt.close()
         

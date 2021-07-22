@@ -7,9 +7,9 @@ import torch.nn.functional as F
 import numpy as np
 from utils import *
 
-# class Swish(nn.Module):
-#     def forward(self, x):
-#         return x * torch.sigmoid(x)
+class Swish(nn.Module):
+    def forward(self, x):
+        return x * torch.sigmoid(x)
 
 class NPG_NETS(nn.Module):
     def __init__(self,
@@ -29,7 +29,7 @@ class NPG_NETS(nn.Module):
                                     # nn.ReLU(),
                                    nn.Linear(policy_hidden, action_size))
         
-        self.min_log_std = torch.ones(action_size, device = device) * -3.0
+        self.min_log_std = torch.ones(action_size, device = device) * -2.5
         
         self.policy_log_std = nn.Parameter(torch.ones(action_size, device = device) * 0.0)
                 
@@ -68,7 +68,7 @@ class NPG_Agent():
                  policy_hidden = 64,
                  value_hidden = 128,
                  lr_value = 1e-3,
-                 reg_value = 0.0, #1e-3
+                 reg_value = 0, #1e-3,
                  gamma = 0.995,
                  GAE_lambda = 0.97,
                  norm_step_size = 0.05):
@@ -119,7 +119,7 @@ class NPG_Agent():
         # Transform actions to correct scale (tanh might cause issues, more likely to improve performance in MBRLAnt)
         actions = torch.tanh(actions_raw)
         
-        log_probs = dist.log_prob(actions_raw) - torch.log(1 - actions**2 + 1e-6)
+        log_probs = dist.log_prob(actions_raw) #- torch.log(1 - actions**2 + 1e-6)
         log_probs = log_probs.sum(-1)
         entropy = dist.entropy()
         entropy = entropy.sum(-1)
@@ -179,7 +179,7 @@ class NPG_Agent():
                                           torch.tensor([0.0]).to(self.device) if term else state_values[-1, None]])
                 TD_resid = reward + self.gamma * state_values[1:] - state_values[:-1]
                 # Entropy regularization
-                # TD_resid = reward - self.log_alpha.exp().detach() * log_prob.detach() + self.gamma * state_values[1:] - state_values[:-1]
+                # TD_resid = reward * self.reward_scale - log_prob.detach() + self.gamma * state_values[1:] - state_values[:-1]
                 TD_resids.append(TD_resid)
         
         advantages = []
@@ -201,7 +201,7 @@ class NPG_Agent():
         #     run_sum = TD_resid[:, t] + (self.gamma * self.GAE_lambda) * run_sum
         #     advantages[:, t] = run_sum
         
-        # Whitening (seems to contribute to performance decay (?) )
+        # Whitening (seems to contribute to performance decay (?))
         advantages = torch.cat(advantages, dim = 0)
         advantages = (advantages - advantages.mean())/(advantages.std() + 1e-6)
                                     
@@ -268,7 +268,7 @@ class NPG_Agent():
     #     loss_alpha.backward()
     #     self.optim_alpha.step()
         
-    def update_value(self, states, rewards, log_probs, terminated, epochs = 1, batch_size = 64):
+    def update_value(self, states, rewards, log_probs, terminated, epochs = 1, batch_size = 128):
                 
         returns = []
         processed_states = []
@@ -277,7 +277,7 @@ class NPG_Agent():
             run_sum = 0.0
             for t in reversed(range(0, reward.shape[0])):
                 run_sum = reward[t, None] + self.gamma * run_sum
-                # run_sum = reward[t, None] - self.log_alpha.exp().detach() * log_prob[t, None].detach() + self.gamma * run_sum
+                # run_sum = reward[t, None] * self.reward_scale - log_prob[t, None].detach() + self.gamma * run_sum
                 returns_traj.append(run_sum)
             returns_traj.reverse()
             if term:

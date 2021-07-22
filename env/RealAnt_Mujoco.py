@@ -25,7 +25,9 @@ class AntEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 
         self.int_err, self.past_err = 0, 0
         self.delayed_meas = [(np.random.random(3), np.random.random(3))]
+        # self.delayed_meas = [(np.random.random(3), np.random.random(4))]
         self.past_obses = deque([np.zeros(29)]*self.n_past_obs, maxlen=self.n_past_obs)
+        # self.past_obses = deque([np.zeros(28)]*self.n_past_obs, maxlen=self.n_past_obs)
 
         dir_path = os.path.dirname(os.path.realpath(__file__))
         mujoco_env.MujocoEnv.__init__(self, f'{dir_path}/mujoco.xml', 5)
@@ -80,7 +82,8 @@ class AntEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             raise Exception('Unknown task')
 
         state = self.state_vector()
-        notdone = np.isfinite(state).all()
+        notdone = np.isfinite(state).all() #\
+            # and state[2] >= 0.063 and state[2] <= 0.31
         done = not notdone
 
         return ob, reward, done, {}
@@ -93,8 +96,10 @@ class AntEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         # add noise
         body_xyz += np.random.randn(3) * self.xyz_noise_std
         body_rpy += np.random.randn(3) * self.rpy_noise_std
+        # body_quat += np.random.randn(4) * self.rpy_noise_std
 
         self.delayed_meas.append((body_xyz, body_rpy))
+        # self.delayed_meas.append((body_xyz, body_quat))
 
         body_xyz, body_rpy = self.delayed_meas[0]
 
@@ -108,6 +113,7 @@ class AntEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             body_xyz_vel,
             body_xyz[-1:],
             body_rpy_vel,
+            # body_rpy,
             np.sin(body_rpy),
             np.cos(body_rpy),
             joint_positions,
@@ -129,13 +135,16 @@ class AntEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 
         self.prev_body_xyz = np.copy(self.sim.data.qpos.flat[:3])
         self.prev_body_rpy = R.from_quat(np.copy(self.sim.data.qpos.flat[3:7])).as_euler('xyz')
+        # self.prev_body_rpy = np.copy(self.sim.data.qpos.flat[3:7])
 
         body_xyz = np.copy(self.sim.data.qpos.flat[:3])
         body_quat = np.copy(self.sim.data.qpos.flat[3:7])
         body_rpy = R.from_quat(body_quat).as_euler('xyz')
 
         self.delayed_meas = deque([(body_xyz, body_rpy)]*(self.n_delay_steps+1), maxlen=(self.n_delay_steps+1))
+        # self.delayed_meas = deque([(body_xyz, body_quat)]*(self.n_delay_steps+1), maxlen=(self.n_delay_steps+1))
         self.past_obses = deque([np.zeros(29)]*self.n_past_obs, maxlen=self.n_past_obs)
+        # self.past_obses = deque([np.zeros(28)]*self.n_past_obs, maxlen=self.n_past_obs)
 
         return self._get_obs()
     

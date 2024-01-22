@@ -37,34 +37,32 @@ class NPG_Model(nn.Module):
                  ensemble_size = 4,
                  hidden_size = 512,
                  lr = 1e-3,
-                 replay_buffer_size = 2500):
+                 replay_buffer_size = 10^6):
         super().__init__()
         
         input_size = state_size + action_size
         
-        self.weights = [create_weight((ensemble_size, input_size, hidden_size), device),
-                        create_weight((ensemble_size, hidden_size, hidden_size), device),
-                        create_weight((ensemble_size, hidden_size, output_size), device)]
+        n_hidden_layers = 2
         
-        # self.weights = [trunc_initializer((ensemble_size, input_size, hidden_size), 1.0 / (2.0 * np.sqrt(input_size))).to(device),
-        #         trunc_initializer((ensemble_size, hidden_size, hidden_size), 1.0 / (2.0 * np.sqrt(hidden_size))).to(device),
-        #         # trunc_initializer((ensemble_size, hidden_size, hidden_size), 1.0 / (2.0 * np.sqrt(hidden_size))).to(device),
-        #         trunc_initializer((ensemble_size, hidden_size, output_size), 1.0 / (2.0 * np.sqrt(hidden_size))).to(device)]
-        # for w in self.weights:
-        #     w.requires_grad = True
-          
-        self.biases = [create_weight((ensemble_size, 1, hidden_size), device, bias = True),
-                        create_weight((ensemble_size, 1, hidden_size), device, bias = True),
-                        create_weight((ensemble_size, 1, output_size), device, bias = True)]
+        self.weights = nn.ParameterList()
+        self.weights.append(
+            trunc_initializer((ensemble_size, input_size, hidden_size), 1.0 / (2.0 * np.sqrt(input_size))))
+        for _ in range(n_hidden_layers):
+            self.weights.append(
+                trunc_initializer((ensemble_size, hidden_size, hidden_size), 1.0 / (2.0 * np.sqrt(hidden_size))))
+        self.weights.append(
+            trunc_initializer((ensemble_size, hidden_size, output_size), 1.0 / (2.0 * np.sqrt(hidden_size))))
         
-        # self.biases = [torch.zeros(ensemble_size, 1, hidden_size, requires_grad = True, device = device),
-        #         torch.zeros(ensemble_size, 1, hidden_size, requires_grad = True, device = device),
-        #         # torch.zeros(ensemble_size, 1, hidden_size, requires_grad = True, device = device),
-        #         torch.zeros(ensemble_size, 1, output_size, requires_grad = True, device = device)]
+        self.biases = nn.ParameterList()
+        self.biases.append(torch.zeros(ensemble_size, 1, hidden_size))
+        self.act_funs = []
+        self.act_funs.append(Swish)
+        for _ in range(n_hidden_layers):
+            self.biases.append(torch.zeros(ensemble_size, 1, hidden_size))
+            self.act_funs.append(Swish)
+        self.biases.append(torch.zeros(ensemble_size, 1, (output_size)))
+        self.act_funs.append(nn.Sequential())
         
-        self.act_funs = [nn.ReLU(), nn.ReLU(), nn.Sequential()]
-        
-        # self.act_funs = [Swish, Swish, nn.Sequential()]
         
         self.mu = nn.Parameter(torch.zeros((1, input_size), device = device), requires_grad = False)
         self.sigma = nn.Parameter(torch.ones((1, input_size), device = device), requires_grad = False)
@@ -85,14 +83,15 @@ class NPG_Model(nn.Module):
         self.ensemble_size = ensemble_size
                 
         self.env_spec = env_spec
+        self.to(device)
                                 
     def forward(self, states, actions):
         
         states_proc = self.env_spec.state_preproc(states)
                         
-        comb = torch.cat([states_proc ,actions], -1)
+        comb = torch.cat([states_proc, actions], -1)
     
-        comb = (comb - self.mu)/(self.sigma + 1e-8)
+        comb = (comb - self.mu)/(self.sigma)
               
         for weight, bias, act_fun in zip(self.weights, self.biases, self.act_funs):
             comb = torch.bmm(comb, weight) + bias
@@ -106,8 +105,8 @@ class NPG_Model(nn.Module):
         with torch.no_grad():
             state_diffs = self.forward(state, act)
             
-        prediction = state_diffs * (self.sigma_target + 1e-8) + self.mu_target
-        prediction = prediction * self.mask
+        prediction = state_diffs * (self.sigma_target) + self.mu_target
+        prediction = prediction
         
         return self.env_spec.state_postproc(state[0, :, :], prediction.mean(0)).cpu().numpy()
     
@@ -117,8 +116,8 @@ class NPG_Model(nn.Module):
         with torch.no_grad():
             state_diffs = self.forward(state, act)[model_index, :, :]
             
-        prediction = state_diffs * (self.sigma_target + 1e-8) + self.mu_target
-        prediction = prediction * self.mask
+        prediction = state_diffs * (self.sigma_target) + self.mu_target
+        prediction = prediction
         
         return self.env_spec.state_postproc(state[0, :, :], prediction).squeeze(0)
     
@@ -132,8 +131,8 @@ class NPG_Model(nn.Module):
                     
         state_diffs = self._flatten_to_matrix(state_diffs)
         
-        prediction = state_diffs * (self.sigma_target + 1e-8) + self.mu_target
-        prediction = prediction * self.mask
+        prediction = state_diffs * (self.sigma_target) + self.mu_target
+        prediction = prediction
         
         return self.env_spec.state_postproc(state, prediction)
     
@@ -177,7 +176,7 @@ class NPG_Model(nn.Module):
         
         targets = self.env_spec.target_proc(states, next_states)
                 
-        targets = (targets - self.mu_target)/(self.sigma_target + 1e-8)
+        targets = (targets - self.mu_target)/(self.sigma_target)
         
         with torch.no_grad():
             outputs = self.forward(states, actions)
@@ -195,7 +194,7 @@ class NPG_Model(nn.Module):
                         create_weight((ensemble_size, 1, output_size), device, bias = True)]
     
     # n_epochs seems quite critical to performance  25 10**4  
-    def update_parameters(self, n_epochs = 100, batch_size = 200, min_grad_upds = 10**2,
+    def update_parameters(self, n_epochs = 10, batch_size = 200, min_grad_upds = 10**2,
                           max_grad_upds = 10**5):
         
         # Shape: 0: Obs Index 1: Dim
@@ -206,7 +205,7 @@ class NPG_Model(nn.Module):
                                       t in zip(*self.replay_buffer)]
         
         
-        gen_loss = self.eval_loss(state_all[-1000:, :], action_all[-1000:, :], next_state_all[-1000:, :])
+        # gen_loss = self.eval_loss(state_all[-1000:, :], action_all[-1000:, :], next_state_all[-1000:, :])
         
         n = state_all.shape[0]
             
@@ -216,14 +215,14 @@ class NPG_Model(nn.Module):
         targets = self.env_spec.target_proc(state_all, next_state_all)
         
         mu_targets = np.mean(targets, axis = 0, keepdims = True)
-        sigma_targets = np.mean(np.abs(targets - mu_targets), axis = 0, keepdims = True)
+        sigma_targets = np.std(targets, axis = 0, keepdims = True)
         
         self.mu_target.data = torch.FloatTensor(mu_targets).to(self.device)
         self.sigma_target.data = torch.FloatTensor(sigma_targets).to(self.device)
-        self.mask = self.sigma_target >= 1e-8
+        # self.mask = self.sigma_target >= 1e-8
         
         mu = np.mean(inputs, axis = 0, keepdims = True)
-        sigma = np.mean(np.abs(inputs - mu), axis = 0, keepdims = True)
+        sigma = np.std(inputs, axis = 0, keepdims = True)
         
         self.mu.data = torch.FloatTensor(mu).to(self.device)
         self.sigma.data = torch.FloatTensor(sigma).to(self.device)
@@ -251,7 +250,7 @@ class NPG_Model(nn.Module):
                 
                 targets = self.env_spec.target_proc(state_batch, next_state_batch)
                 
-                targets = (targets - self.mu_target)/(self.sigma_target + 1e-8)
+                targets = (targets - self.mu_target)/(self.sigma_target)
                 
                 outputs = self.forward(state_batch, action_batch)
                 
@@ -277,4 +276,4 @@ class NPG_Model(nn.Module):
                 # print("Model training stopped due to epoch max")
                 break
             
-        return gen_loss
+        # return gen_loss

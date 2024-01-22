@@ -1,5 +1,5 @@
-import gym
-from gym import wrappers
+import gymnasium as gym
+from gymnasium import wrappers
 import numpy as np
 import torch
 import random
@@ -10,8 +10,7 @@ import os
 
 import env as env_specs
 from NPG import NPG_Agent
-from SAC_MB import SAC
-from NPG_model_separate import NPG_Model
+from NPG_model import NPG_Model
 
 from collections import deque
 
@@ -74,12 +73,12 @@ class Train_Instance():
             self.env = gym.make(args.env_name)
             self.env_eval = gym.make(args.env_name)
             
-        # self.env_eval = wrappers.Monitor(self.env_eval,'./videos/MPC_{}/seed_{}/'.format(args.model, seed),
+        # self.env_eval = wrappers.Monitor(self.env_eval,'./videos/{}_{}/seed_{}/'.format(args.leader, args.policy_alg, seed),
         #                         video_callable=lambda episode_id: True, force = True)
         
-        self.env.seed(seed)
+        # self.env.seed(seed)
         self.env.action_space.seed(seed)
-        self.env_eval.seed(seed)
+        # self.env_eval.seed(seed)
         self.env_eval.action_space.seed(seed)
         random.seed(seed)
         np.random.seed(seed)
@@ -100,8 +99,6 @@ class Train_Instance():
         
         if 'NPG' in args.policy_alg:
             self.agent = NPG_Agent(state_size, action_size, max_action, min_action, self.device)
-        elif 'SAC' in args.policy_alg:
-            self.agent = SAC(state_size, action_size, max_action, self.device)
         else:
             Exception("No such alg exists")
                     
@@ -114,7 +111,7 @@ class Train_Instance():
         elif 'RealAntMujoco' in args.env_name:
             self.env_spec = env_specs.env_funcs.RealAntMujoco(args.task, args.latency, args.min_obs_stack)
             self.max_val = torch.ones(state_size).to(self.device) * 20
-            self.min_val = self.max_val * -1.0
+            self.min_val = self.max_val * -20.0
             # self.max_val = torch.tensor([0.04, 0.04, 0.02,
             #                          0.25, 6.5, 0.2, 0.25,
             #                          0.1, 0.15, 0.6, -0.98,
@@ -144,22 +141,28 @@ class Train_Instance():
         
         self.seed = seed
         
-        self.agent = TD3(self.device, state_size, action_size)
-        self.agent.load_model('td3_model_699.pt')
+        # self.agent = TD3(self.device, state_size, action_size)
+        # self.agent.load_model('td3_model_699.pt')
+        
+        test_state, info = self.env.reset()
+        
+        self.test_joint_pos = test_state[13:21]
+        self.test_action = self.test_joint_pos/2
+        #self.agent.act(self.env.reset(), train = False) #self.env.action_space.sample()
         
      
     def evaluate_policy(self, n_samples_collected, n_episodes = 10):
         returns = []
         for ep in range(n_episodes):
-            state = self.env_eval.reset()
+            state, info = self.env_eval.reset()
             return_ep = 0
             done = False
             for _ in range(self.args.ep_len):
-                # action = self.agent.sample_action(state, evaluate = True)
-                action = self.agent.act(state, train = False)
-                state, reward, done, _ = self.env_eval.step(action)
+                action = self.agent.sample_action(state, evaluate = True)
+                # action = self.test_action #self.agent.act(state, train = False)
+                state, reward, done,trunc, _ = self.env_eval.step(action)
                 return_ep += reward
-                if done:
+                if (done or trunc):
                     break
                 
             returns.append(return_ep)
@@ -181,7 +184,7 @@ class Train_Instance():
                 
         for _ in range(self.args.ep_len):
             # action = self.agent.sample_action(state, evaluate = True)
-            action = self.agent.act(state, train = False)
+            action = self.test_action #self.agent.act(state, train = False)
             actions.append(action)
             
             next_state, reward, done, _ = self.env_eval.step(action)
@@ -262,13 +265,21 @@ class Train_Instance():
         indices = np.concatenate([hip_angle_inds, knee_angle_inds, 
                                   hip_vel_inds, knee_vel_inds])
         
+        hip_angle_action_inds = np.arange(0, 8, 2)
+        knee_angle_action_inds = hip_angle_action_inds + 1
+        
+        action_inds = np.concatenate([hip_angle_action_inds, knee_angle_action_inds,
+                                      hip_angle_action_inds, knee_angle_action_inds])
+        
         with PdfPages(os.path.join(self.output_dir, f'Model_predictions_{n_samples_collected}.pdf')) as pdf:
-            for dim, name in zip(indices, names):
+            for dim, name, action_dim in zip(indices, names, action_inds):
                 plt.figure(figsize = (10, 10))
                 plt.plot(states[:, dim], label = 'Ground Truth')
                 for i, horizon in enumerate(horizons):
                     plt.plot(pred_states[i, :, dim], label = f'{horizon}-step prediction')
-                [plt.axvline(x_, ymin = 0, ymax = 1, linestyle = '--', color = 'k', alpha = 0.3) for x_ in np.arange(0, 200 , 15)]
+                [plt.axvline(x_, ymin = 0, ymax = 1, linestyle = '--', color = 'k', alpha = 0.3) for x_ in np.arange(0, self.args.ep_len , 15)]
+                if 'vel' not in name:
+                    plt.hlines(self.test_joint_pos[action_dim], 0, self.args.ep_len, colors = 'k')
                 plt.xlabel('Env step')
                 plt.ylabel(f'Dimension {dim}')
                 plt.title(f'{name}')
@@ -303,24 +314,25 @@ class Train_Instance():
         else:
             env = gym.make(self.args.env_name)
             
-        env.seed(self.seed)
+        # env.seed(self.seed)
+        env.action_space.seed(self.seed)
         
         while True:
-            state = env.reset()
+            state, info = env.reset(seed = self.seed)
             self.initial_state_buffer.append(state)
             done = False
             for i in range(self.args.ep_len):
                 if i != 0:
                     self.interm_state_buffer.append(state)
-                # action = self.agent.sample_action(state, evaluate = False)
-                action = self.agent.act(state, train = True, noise = 0.25)
-                next_state, reward, done, _ = env.step(action)
+                action = self.agent.sample_action(state, evaluate = False)
+                # action = self.test_action #self.agent.act(state, train = True, noise = 0.25)
+                next_state, reward, done,trunc, _ = env.step(action)
                 
                 self.model.save_transition(state, action, next_state, reward)
                 sample_counter += 1
                 
                 state = next_state
-                if sample_counter >= n_samples or done:
+                if sample_counter >= n_samples or done or trunc:
                     break
             if sample_counter >= n_samples:
                 break
@@ -368,22 +380,22 @@ class Train_Instance():
         # Sample initial states from the buffer (might need to sample intermediate states as well)
         # Since the actions pretty much stop changing after approx. 200 steps
         
-        if 'RealAntMujoco-v0' in self.args.env_name:
-            env = gym.make(
-                'RealAntMujoco-v0',
-                task = self.args.task,
-                latency = self.args.latency,
-                xyz_noise_std = self.args.xyz_noise_std,
-                rpy_noise_std = self.args.rpy_noise_std,
-                min_obs_stack = self.args.min_obs_stack
-            )
-        else:
-            env = gym.make(self.args.env_name)
+        # if 'RealAntMujoco-v0' in self.args.env_name:
+        #     env = gym.make(
+        #         'RealAntMujoco-v0',
+        #         task = self.args.task,
+        #         latency = self.args.latency,
+        #         xyz_noise_std = self.args.xyz_noise_std,
+        #         rpy_noise_std = self.args.rpy_noise_std,
+        #         min_obs_stack = self.args.min_obs_stack
+        #     )
+        # else:
+        #     env = gym.make(self.args.env_name)
                 
         init_frac = 0.5
         
-        init_states = np.array([env.reset() for _ in range(int(self.args.n_rollouts * init_frac) + 1)])
-        # init_states = np.array(random.choices(self.initial_state_buffer, k = self.args.n_rollouts // 2))
+        # init_states = np.array([env.reset() for _ in range(int(self.args.n_rollouts * init_frac) + 1)])
+        init_states = np.array(random.choices(self.initial_state_buffer, k = int(self.args.n_rollouts * (init_frac)) + 1))
         interm_states = np.array(random.sample(self.interm_state_buffer,
                                                k = int(self.args.n_rollouts * (1 - init_frac)) + 1))
         
@@ -418,7 +430,7 @@ class Train_Instance():
             # print(f'Actual prediction: {next_state[4, :]} \n')
             states.append(next_state)
             
-            reward = self.env_spec.reward_fun(action, next_state)
+            reward = self.env_spec.reward_fun(action, next_state, self.device)
             rewards.append(reward)
             
             state = next_state
@@ -475,13 +487,13 @@ class Train_Instance():
         return state_traj_trunc, action_traj_trunc, log_prob_traj_trunc, entropy_traj_trunc,  \
                 reward_traj_trunc, terminated_traj
                     
-    def run_training(self, n_total_samples, n_initial_samples = 100000):
+    def run_training(self, n_total_samples, n_initial_samples = 5000):
         
         sample_counter = 0
         policy_perf = []
-        policy_std = []
-        model_loss_legs = []
-        model_loss_pose = []
+        # policy_std = []
+        # model_loss_legs = []
+        # model_loss_pose = []
         
         policy_perf.append(self.evaluate_policy(sample_counter))
         # policy_std.append(self.agent.get_policy_std())
@@ -492,15 +504,15 @@ class Train_Instance():
 
         sample_counter += n_initial_samples
         
-        losses_leg = self.model.update_parameters()
+        # losses_leg = self.model.update_parameters()
         
-        plt.figure(figsize = (19.2, 10.8))
-        plt.plot(losses_leg)
-        plt.xlabel('Epoch')
-        plt.ylabel('Mean negative log-likelihood')
-        plt.savefig(os.path.join(self.output_dir, 'losses_leg.pdf'))
+        # plt.figure(figsize = (19.2, 10.8))
+        # plt.plot(losses_leg)
+        # plt.xlabel('Epoch')
+        # plt.ylabel('Mean negative log-likelihood')
+        # plt.savefig(os.path.join(self.output_dir, 'losses_leg.pdf'))
         
-        self.evaluate_dynamics(sample_counter)
+        # self.evaluate_dynamics(sample_counter)
         
         # for _ in range(50):
         #     states, actions, log_probs, entropies, rewards, terminated = self.generate_real_rollouts()
@@ -512,47 +524,47 @@ class Train_Instance():
         #     policy_perf.append(self.evaluate_policy(sample_counter))
         #     policy_std.append(self.agent.get_policy_std())
         
-        # while sample_counter <= n_total_samples:
+        while sample_counter <= n_total_samples:
             
-        #     # Train models
-        #     print('Training model...')
-        #     model_losses = self.model.update_parameters()
+            # Train models
+            print('Training model...')
+            model_losses = self.model.update_parameters()
             
-        #     model_loss_legs.append(model_losses[0])
-        #     model_loss_pose.append(model_losses[1])
-        #     # mu_state, sigma_state = self.model.get_state_stats()
-        #     # self.agent.update_state_stats(mu_state, sigma_state, sim = False)
+            # model_loss_legs.append(model_losses[0])
+            # model_loss_pose.append(model_losses[1])
+            # mu_state, sigma_state = self.model.get_state_stats()
+            # self.agent.update_state_stats(mu_state, sigma_state, sim = False)
             
-        #     # self.evaluate_dynamics(sample_counter)
+            # self.evaluate_dynamics(sample_counter)
             
-        #     # NPG updates
-        #     # print('Starting policy updates...')
-        #     # for _ in range(self.args.n_NPG_updates):
-        #     #     # Generate synthetic trajectories
-        #     #     states, actions, log_probs, entropies, rewards, terminated = self.sim_rollout_gen(sample_counter)
-        #     #     print('Rollouts done.')
-        #     #     # Update policy
-        #     #     self.agent.update_policy(states, actions,
-        #     #               log_probs, entropies, rewards, terminated)
-        #     #     print('Policy Updated.')
-        #     #     # Update value function
-        #     #     if 'NPG' in self.args.policy_alg:
-        #     #         self.agent.update_value(states, rewards, log_probs, terminated)
-        #     #     print('Value function updated.')
+            # NPG updates
+            print('Starting policy updates...')
+            for _ in range(self.args.n_NPG_updates):
+                # Generate synthetic trajectories
+                states, actions, log_probs, entropies, rewards, terminated = self.sim_rollout_gen(sample_counter)
+                print('Rollouts done.')
+                # Update policy
+                self.agent.update_policy(states, actions,
+                          log_probs, entropies, rewards, terminated)
+                print('Policy Updated.')
+                # Update value function
+                if 'NPG' in self.args.policy_alg:
+                    self.agent.update_value(states, rewards, log_probs, terminated)
+                print('Value function updated.')
                 
-        #     self.evaluate_dynamics(sample_counter)
+            # self.evaluate_dynamics(sample_counter)
                         
-        #     # # Evaluate new policy
-        #     policy_perf.append(self.evaluate_policy(sample_counter))
-        #     # policy_std.append(self.agent.get_policy_std())
+            # # Evaluate new policy
+            policy_perf.append(self.evaluate_policy(sample_counter))
+            # policy_std.append(self.agent.get_policy_std())
             
-        #     # Collect data under new policy
-        #     print('Collecting data...')
-        #     self.collect_data(self.args.n_iter_samples)
+            # Collect data under new policy
+            print('Collecting data...')
+            self.collect_data(self.args.n_iter_samples)
             
-        #     sample_counter += self.args.n_iter_samples
+            sample_counter += self.args.n_iter_samples
         
-        # np.save(os.path.join(self.output_dir, 'Perf_data'), np.array(policy_perf))
+        np.save(os.path.join(self.output_dir, 'Perf_data'), np.array(policy_perf))
         
         # np.save(os.path.join(self.output_dir, 'Model_loss_legs'), np.stack(model_loss_legs, axis = 0))
         # np.save(os.path.join(self.output_dir, 'Model_loss_pose'), np.stack(model_loss_pose, axis = 0))

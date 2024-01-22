@@ -22,11 +22,11 @@ class NPG_NETS(nn.Module):
                  reg_value):
         super().__init__()
         self.policy = nn.Sequential(nn.Linear(state_size, policy_hidden),
-                                   nn.Tanh(),
+                                   nn.ReLU(),
                                    nn.Linear(policy_hidden, policy_hidden),
-                                   nn.Tanh(),
-                                    # nn.Linear(policy_hidden, policy_hidden),
-                                    # nn.ReLU(),
+                                   nn.ReLU(),
+                                   nn.Linear(policy_hidden, policy_hidden),
+                                   nn.ReLU(),
                                    nn.Linear(policy_hidden, action_size))
         
         self.min_log_std = torch.ones(action_size, device = device) * -2.5
@@ -42,19 +42,19 @@ class NPG_NETS(nn.Module):
                                    nn.ReLU(),
                                    nn.Linear(value_hidden, value_hidden),
                                    nn.ReLU(),
-                                    # nn.Linear(value_hidden, value_hidden),
-                                    # nn.ReLU(),
+                                   nn.Linear(value_hidden, value_hidden),
+                                   nn.ReLU(),
                                    nn.Linear(value_hidden, 1))
         
         self.optim_value = optim.Adam(self.value.parameters(), weight_decay = reg_value)
         
-        # for m in self.modules():
-        #     if type(m) is nn.Linear:
-        #         nn.init.xavier_normal_(m.weight)
-        #         nn.init.zeros_(m.bias)
+        for m in self.modules():
+            if type(m) is nn.Linear:
+                nn.init.xavier_normal_(m.weight)
+                nn.init.zeros_(m.bias)
         
-        for param in list(self.policy.parameters())[-2:]:
-            param.data = 1e-2 * param.data
+        # for param in list(self.policy.parameters())[-2:]:
+        #     param.data = 1e-2 * param.data
                                         
         self.to(device)
 
@@ -105,7 +105,7 @@ class NPG_Agent():
         
         # State standardization might be the cause of the observed performance decay (?)
         # Probably not
-        states = (states - self.mu_state_sim)/(self.sigma_state_sim + 1e-8)
+        states = states
         
         # states = torch.clamp(states, min = -10.0, max = 10.0)/10.0
         
@@ -119,7 +119,7 @@ class NPG_Agent():
         # Transform actions to correct scale (tanh might cause issues, more likely to improve performance in MBRLAnt)
         actions = torch.tanh(actions_raw)
         
-        log_probs = dist.log_prob(actions_raw) #- torch.log(1 - actions**2 + 1e-6)
+        log_probs = dist.log_prob(actions_raw) - torch.log(1 - actions**2 + 1e-6)
         log_probs = log_probs.sum(-1)
         entropy = dist.entropy()
         entropy = entropy.sum(-1)
@@ -134,7 +134,7 @@ class NPG_Agent():
     def sample_action(self, state, evaluate):
         state = torch.from_numpy(state).float().to(self.device).unsqueeze(0)
         
-        state = (state - self.mu_state)/(self.sigma_state + 1e-8)
+        state = state #(state - self.mu_state)/(self.sigma_state)
         
         # state = torch.clamp(state, min = -10.0, max = 10.0)/10.0
         
@@ -173,7 +173,7 @@ class NPG_Agent():
         
         for state, reward, log_prob, term in zip(states, rewards, log_probs, terminated):
             with torch.no_grad():
-                state = torch.clamp(state, min = -10.0, max = 10.0)/10.0
+                state = state
                 state_values = self.nets.value(state).squeeze(-1)
                 state_values = torch.cat([state_values[:-1], 
                                           torch.tensor([0.0]).to(self.device) if term else state_values[-1, None]])
@@ -203,7 +203,7 @@ class NPG_Agent():
         
         # Whitening (seems to contribute to performance decay (?))
         advantages = torch.cat(advantages, dim = 0)
-        advantages = (advantages - advantages.mean())/(advantages.std() + 1e-6)
+        # advantages = (advantages - advantages.mean())/(advantages.std() + 1e-6)
                                     
         return advantages
     
@@ -233,17 +233,17 @@ class NPG_Agent():
         vpg = torch.autograd.grad(surr_CPI, self.nets.policy_params)
         vpg = flat_grad(vpg)
         
-        print(f'VPG: {vpg} nan? : {torch.isnan(vpg).any()} inf? : {torch.isinf(vpg).any()}')
+        # print(f'VPG: {vpg} nan? : {torch.isnan(vpg).any()} inf? : {torch.isinf(vpg).any()}')
         
         states = torch.cat(states, dim = 0)
-        states_cg = (states - self.mu_state_sim)/(self.sigma_state_sim + 1e-8)
+        states_cg = states
         
         # states_cg = torch.clamp(states_cg, min = -10.0, max = 10.0)/10.0
                 
         # Compute Natural PG
         npg = conjugate_gradient((self.nets.policy, self.nets.policy_params, self.nets.policy_log_std), states_cg, vpg, vpg.clone(),
                                  action_size = self.action_size, device = self.device)
-        print(f'NPG: {npg}')
+        # print(f'NPG: {npg}')
         
         # Update policy parameters
         current_params = flat_params(self.nets.policy_params)
@@ -293,7 +293,7 @@ class NPG_Agent():
         
         states_target = torch.cat(processed_states, dim = 0)
         
-        states_target = torch.clamp(states_target, min = -10.0, max = 10.0)/10.0
+        # states_target = torch.clamp(states_target, min = -10.0, max = 10.0)/10.0
         
         n = states_target.shape[0]
         

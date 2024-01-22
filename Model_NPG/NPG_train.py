@@ -12,9 +12,9 @@ parser = argparse.ArgumentParser()
 # Environment parameters
 parser.add_argument('--env_name', type=str, required=True,
                     help='Name of the environment')
-parser.add_argument('--n_total_samples', type=int, default=10000,
+parser.add_argument('--n_total_samples', type=int, default=15000,
                     help='Number of samples collected in total')
-parser.add_argument('--ep_len', type=int, default = 1000,
+parser.add_argument('--ep_len', type=int, default = 200,
                     help='Length of an episode')
 
 parser.add_argument('--policy_alg', type=str, default = 'NPG', choices=['NPG', 'SAC'],
@@ -23,7 +23,7 @@ parser.add_argument('--leader', type=str, default = 'PAL',
                     help='Algorithm family')
 parser.add_argument('--n_rollouts', type=int, default = 200,
                     help='Number of rollouts per iteration')
-parser.add_argument('--rollout_len', type=int, default = 500,
+parser.add_argument('--rollout_len', type=int, default = 200,
                     help='Rollout length')
 parser.add_argument('--ensemble_size', type=int, default = 4,
                     help='Number of dynamics models in ensemble')
@@ -46,20 +46,20 @@ def start_training(fargs):
     
 if __name__ == '__main__':
     args = parser.parse_args()
-    # seeds = [0, 2]#, 754]#, 6745]
-    seeds = [101]
+    seeds = [0, 2, 754, 6745]
+    # seeds = [101]
     
-    # mp.set_start_method('spawn')
+    mp.set_start_method('spawn')
     
-    # pool = mp.Pool(processes=mp.cpu_count())
+    pool = mp.Pool(processes=mp.cpu_count())
     
-    # train_instances = [Train_Instance((seed, args)) for seed in seeds]
+    train_instances = [Train_Instance((seed, args)) for seed in seeds]
     
-    # pool.map(start_training, zip(train_instances, 
-    #                               itertools.repeat(args.n_total_samples, len(train_instances))))
+    pool.map(start_training, zip(train_instances, 
+                                  itertools.repeat(args.n_total_samples, len(train_instances))))
     
-    train_instance = Train_Instance((seeds[0], args))
-    train_instance.run_training(args.n_total_samples)
+    # train_instance = Train_Instance((seeds[0], args))
+    # train_instance.run_training(args.n_total_samples)
     
     output_dir = args.env_name + f'_{args.leader}_{args.policy_alg}'
             
@@ -75,7 +75,7 @@ if __name__ == '__main__':
     plt.plot(np.mean(returns, axis = 1), linestyle='dashed')
     plt.xlabel('Episode')
     plt.ylabel('Return')
-    plt.savefig(os.path.join(output_dir, 'performance.pdf'))
+    plt.savefig(os.path.join(output_dir, 'Performance.pdf'))
     
     # plt.figure(figsize = (19.2, 10.8))
     

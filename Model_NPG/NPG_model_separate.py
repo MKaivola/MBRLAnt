@@ -40,7 +40,7 @@ class NPG_Model(nn.Module):
                  ensemble_size = 4,
                  hidden_size = 512,
                  lr = 1e-3,
-                 replay_buffer_size = 100000):
+                 replay_buffer_size = 25000):
         super().__init__()
         
         input_size = state_size + action_size
@@ -57,14 +57,14 @@ class NPG_Model(nn.Module):
         #                 create_weight((ensemble_size, hidden_size, hidden_size), device),
         #                 create_weight((ensemble_size, hidden_size, output_size), device)]
         
-        self.weights_leg = [trunc_initializer((ensemble_size, self.n_leg_input, hidden_size), 1.0 / (2.0 * np.sqrt(input_size))).to(device),
+        self.weights_leg = [trunc_initializer((ensemble_size, self.n_leg_input, hidden_size), 1.0 / (2.0 * np.sqrt(self.n_leg_input))).to(device),
                 trunc_initializer((ensemble_size, hidden_size, hidden_size), 1.0 / (2.0 * np.sqrt(hidden_size))).to(device),
                 # trunc_initializer((ensemble_size, hidden_size, hidden_size), 1.0 / (2.0 * np.sqrt(hidden_size))).to(device),
                 trunc_initializer((ensemble_size, hidden_size, 2 * self.n_leg_output), 1.0 / (2.0 * np.sqrt(hidden_size))).to(device)]
         for w in self.weights_leg:
             w.requires_grad = True
             
-        self.weights_pose = [trunc_initializer((ensemble_size, self.n_pose_input, hidden_size), 1.0 / (2.0 * np.sqrt(input_size))).to(device),
+        self.weights_pose = [trunc_initializer((ensemble_size, self.n_pose_input, hidden_size), 1.0 / (2.0 * np.sqrt(self.n_pose_input))).to(device),
             trunc_initializer((ensemble_size, hidden_size, hidden_size), 1.0 / (2.0 * np.sqrt(hidden_size))).to(device),
             # trunc_initializer((ensemble_size, hidden_size, hidden_size), 1.0 / (2.0 * np.sqrt(hidden_size))).to(device),
             trunc_initializer((ensemble_size, hidden_size, 2 * self.n_pose_output), 1.0 / (2.0 * np.sqrt(hidden_size))).to(device)]
@@ -153,7 +153,7 @@ class NPG_Model(nn.Module):
         return inputs
             
     def leg_predict(self, legs_diff, legs_curr = None):
-        # Formats the prediction to original state representation
+        # Formats the leg network prediction to original state representation
         
         next_legs = legs_diff
         if legs_curr is not None:
@@ -437,7 +437,7 @@ class NPG_Model(nn.Module):
         
     
     # n_epochs seems quite critical to performance  25 10**4  
-    def update_parameters(self, n_epochs = 200, batch_size = 200, min_grad_upds = 10**2,
+    def update_parameters(self, n_epochs = 10, batch_size = 200, min_grad_upds = 10**2,
                           max_grad_upds = 10**5):
         
         # Shape: 0: Obs Index 1: Dim

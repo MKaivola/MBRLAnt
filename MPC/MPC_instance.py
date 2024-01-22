@@ -1,5 +1,5 @@
-import gym
-from gym import wrappers
+import gymnasium as gym
+from gymnasium import wrappers
 import numpy as np
 import torch
 import random
@@ -45,9 +45,9 @@ class Train_Instance():
         # self.env_eval = wrappers.Monitor(self.env_eval,'./videos/MPC_{}/seed_{}/'.format(args.model, seed),
         #                         video_callable=lambda episode_id: True, force = True)
         
-        self.env.seed(seed)
+        #self.env.seed(seed)
         self.env.action_space.seed(seed)
-        self.env_eval.seed(seed)
+        # self.env_eval.seed(seed)
         self.env_eval.action_space.seed(seed)
         random.seed(seed)
         np.random.seed(seed)
@@ -66,7 +66,9 @@ class Train_Instance():
             prepend_str = '_' + args.regularization
         
         self.output_dir = args.env_name + '_{}_horizon_{}_act_smooth_{}_dyn_epochs_{}_epoch_decay_{}'.format(args.model, args.horizon,
-                                                                         args.action_smooth, args.n_epochs_dyn, args.n_epoch_decay_dyn) + prepend_str
+                                                                         args.action_smooth, 
+                                                                         args.n_epochs_dyn, 
+                                                                         args.n_epoch_decay_dyn) + prepend_str
         if args.TD3_init:
             self.output_dir += '_TD3_init'
             
@@ -81,46 +83,56 @@ class Train_Instance():
         
         os.makedirs(self.output_dir, mode = 0o755, exist_ok = True)
         
-        if "RealAntMujoco" in args.env_name:
+        if "RealAntMujoco-v0" in args.env_name:
             env_spec = env_specs.env_funcs.RealAntMujoco(args.task, args.latency, args.min_obs_stack)
         else:
             Exception("No such env defined")
         
         if args.model == 'Determ':
-            self.model = DETNET(state_size + action_size, 28, action_size,
+            self.model = DETNET(state_size + action_size, state_size, action_size,
                               min_action, max_action,
                               env_spec,
-                              self.device, args.env_name,
-                              seed, args.task, args.latency, args.xyz_noise_std, args.rpy_noise_std, args.min_obs_stack,
+                              self.device,
                               horizon = args.horizon,
-                              population_size = 500,
-                              elite_size = 50,
-                              hidden_size_dyn = 256,
-                              hidden_size_reg = 256,
+                              population_size = 400,
+                              elite_size = 40,
+                              hidden_size_dyn = 400,
+                              hidden_size_reg = 400,
                               filter_coeff = args.action_smooth,
                               lr = 0.001,
-                              n_cem_iterations = 5,
+                              n_cem_iterations = 7,
                               reg = args.regularization,
                               reg_alpha = args.reg_alpha,
                               reg_noise_std = args.reg_noise_std)
-        else:
-            self.model = PETS(state_size + action_size, 29, action_size,
+        elif args.model == 'PETS':
+            self.model = PETS(state_size + action_size, state_size, action_size,
                              min_action, max_action,
                              env_spec,
                              self.device,
                              horizon = args.horizon,
-                             population_size = 500,
-                             elite_size = 50,
+                             population_size = 400,
+                             elite_size = 40,
                              hidden_size = 256,
-                             filter_coeff = 0.5,
+                             filter_coeff = args.action_smooth,
                              lr = 0.001,
                              holdout_ratio = 0,
-                             n_cem_iterations = 7)
+                             n_cem_iterations = 5)
+        else:
+            Exception("No such model defined")
         
         self.agent = TD3(self.device, state_size, action_size)
-        self.agent.load_model('td3_model_699_Quart.pt')
+        self.agent.load_model('td3_model_599.pt')
         
         self.args = args
+        self.seed = seed
+        
+        body_dim_names = np.array(["x Vel", "y Vel", "z Vel", "z Pos", "Roll Vel", "Pitch Vel", "Yaw Vel", "Sin Roll", 
+                          "Sin Pitch", "Sin Yaw", "Cos Roll", "Cos Pitch", "Cos Yaw"])
+        
+        leg_dim_names = np.concatenate((np.tile(np.array(["Hip Angle", "Knee Angle"]),4),
+                                       np.tile(np.array(["Hip Vel", "Knee Vel"]),4)))
+        
+        self.dim_names = np.concatenate((body_dim_names,leg_dim_names))
 
     # def execute_action_seq(self, env, action_seq, n_executions = 10):
     #     ep_returns = []
@@ -132,11 +144,66 @@ class Train_Instance():
     #             ep_return += reward
     #         ep_returns.append(ep_return)
     #     return np.mean(ep_returns), np.std(ep_returns, ddof=1)
+    
+    def evaluate_CEM(self): 
+            state, info = self.env.reset()
+            self.model.reset()
+            
+            for _ in range(25): 
+                # action = self.agent.act(state, train = False, noise = 0.15)
+                action = self.model.act(state, evaluation = False)
+                
+                next_state, reward, done, trunc, _ = self.env.step(action)
+                state = next_state
+                
+            
+            self.model.reset()
+            
+            pred_returns = []
+            real_returns = []
+            
+            mean_action = None
+            
+            for _ in range(50):
+                state = self.env_eval.copy_state(self.env)
+                pred_state = state.copy()
+                mean_action, _ = self.model.cem_test(pred_state, mean_action)
+                pred_return = 0
+                real_return = 0
+                for i in range(self.args.horizon):
+                    action = mean_action[i,:]
+                    
+                    pred_next_state = self.model.predict(pred_state, action)
+                    pred_return += pred_next_state[0]
+                    pred_state = pred_next_state
+                    
+                    next_state, reward, _, _ , _ = self.env_eval.step(action)
+                    real_return += reward
+                    
+                pred_returns.append(pred_return)
+                real_returns.append(real_return)
+                
+                
+            f, ax = plt.subplots(figsize = (10.8, 19.2))
+            
+            cem_iter_count = np.arange(start = 1, stop = 51, step = 1)
+            
+            ax.plot(cem_iter_count, np.array(pred_returns), label = "Predicted Return")
+            ax.plot(cem_iter_count, np.array(real_returns), label = "Real Return")
+            
+            ax.set_ylabel('Return', fontsize = 22)
+            ax.set_xlabel('CEM iteration', fontsize = 22)
+            ax.grid(visible = True)
+            f.tight_layout()
+            plt.legend(fontsize = 22)
+            # plt.title(f"Regularization: {self.args.regularization}")
+            plt.savefig(os.path.join(self.output_dir, 'CEM_Planning_Performance.pdf'))
+    
         
     def evaluate_MPC(self, ep, horizon, n_episodes = 5):
         returns = []
         for ep_ind in range(n_episodes):
-            state = self.env_eval.reset()
+            state, info = self.env_eval.reset()
             done = False
             self.model.reset_eval()
             
@@ -149,9 +216,8 @@ class Train_Instance():
             
             for _ in range(self.args.ep_len):
                 action = self.model.act(state, evaluation = True)
-                # action = self.agent.act(state, train = True)
                 
-                next_state, reward, done, _ = self.env_eval.step(action)
+                next_state, reward, done, trunc, _ = self.env_eval.step(action)
                 ep_return += reward
                 
                 states.append(next_state)
@@ -169,7 +235,7 @@ class Train_Instance():
                 else:
                     pred_state = pred_next_state
         
-                if done:
+                if (done or trunc):
                     break
             returns.append(ep_return)
             
@@ -185,6 +251,7 @@ class Train_Instance():
                         plt.xlabel('Env step')
                         plt.ylabel(f'Dimension {dim}')
                         plt.title('Dynamics model performance ({} episodes)'.format(ep))
+                        plt.legend(['Ground Truth', 'Predicted'])
                         pdf.savefig()
                         plt.close()
         
@@ -192,46 +259,79 @@ class Train_Instance():
         
         return np.mean(returns)
     
-    def evaluate_dynamics(self, ep, horizon):
-        state = self.env_eval.reset()
-        pred_state = state.copy()
-        states = [state]
-        pred_states = [pred_state]
+    def evaluate_dynamics(self, ep, horizons, switch_step):
+        states = np.zeros((self.args.ep_len, self.env.observation_space.shape[0]))
+        actions = np.zeros((self.args.ep_len - 1, self.env.action_space.shape[0]))
+        pred_states = np.zeros((len(horizons), self.args.ep_len, self.env.observation_space.shape[0]))
         
+        
+        state, info = self.env_eval.reset()
+        self.model.reset_eval()
+        # pred_state = state.copy()
+        states[0, :] = state
+        # pred_states[horizon_ind, 0, :] = pred_state
+            
         step = 0
-        
-        for _ in range(self.args.ep_len):
-            action = self.agent.act(state, train = True, noise = 0.3)
+        ep_return = 0
+        for step_ind in range(self.args.ep_len - 1):
             
-            next_state, reward, done, _ = self.env_eval.step(action)
+            if step < switch_step:
+                action = self.agent.act(state, train = True, noise = 0.15)
+            else:
+                action = self.model.act(state, evaluation = True)
             
-            states.append(next_state)
+            next_state, reward, done, trunc, _ = self.env_eval.step(action)
+            ep_return += reward
             
-            pred_next_state = self.model.predict(pred_state, action)
+            states[step_ind + 1, :] = next_state
+            actions[step_ind, :] = action
             
-            pred_states.append(pred_next_state)
+            # pred_next_state = self.model.predict(pred_state, action)
+            
+            # pred_states[horizon_ind, step_ind + 1, :] = pred_next_state
             
             state = next_state
             
             step += 1
             
-            if step % horizon == 0:
-                pred_state = state
-            else:
-                pred_state = pred_next_state
+            # if step % horizons[horizon_ind] == 0:
+            #     pred_state = state
+            # else:
+            #     pred_state = pred_next_state
         
-        states = np.stack(states)
-        pred_states = np.stack(pred_states)
+        print(ep_return)
+        
+        for horizon_ind in range(len(horizons)):
+            pred_state = states[0, :]
+            pred_states[horizon_ind, 0, :] = pred_state
+            step = 0
+            
+            for step_ind in range(self.args.ep_len - 1):
+                action = actions[step_ind, :]
+                
+                pred_next_state = self.model.predict(pred_state, action)
+                pred_states[horizon_ind, step_ind + 1, :] = pred_next_state
+                
+                step += 1
+                
+                if step % horizons[horizon_ind] == 0:
+                    pred_state = states[step_ind + 1, :]
+                else:
+                    pred_state = pred_next_state
+            
+        
         
         with PdfPages(os.path.join(self.output_dir, f'TD3_predictions_ep_{ep}.pdf')) as pdf:
             for dim in range(state.shape[0]):
-                plt.figure(figsize = (10, 10))
-                plt.plot(states[:, dim])
-                plt.plot(pred_states[:, dim])
-                plt.xlabel('Env step')
-                plt.ylabel(f'Dimension {dim}')
-                plt.title('Dynamic model performance ({} epochs)'.format(ep))
-                plt.legend(['Ground Truth', 'Predicted'])
+                plt.figure(figsize = (19.2, 10.8))
+                plt.plot(states[:, dim], label = "Ground Truth")
+                for horizon_ind in range(len(horizons)):
+                    plt.plot(pred_states[horizon_ind, :, dim], label = f"{horizons[horizon_ind]}-step prediction")
+                
+                plt.xlabel('Env step', fontsize = 22)
+                plt.ylabel(self.dim_names[dim], fontsize = 22)
+                plt.title('TD3 trajectory predictions')
+                plt.legend(fontsize = 22)
                 pdf.savefig()
                 plt.close()
     
@@ -241,42 +341,46 @@ class Train_Instance():
         n_epochs_dyn = self.args.n_epochs_dyn
         n_epochs_reg = self.args.n_epochs_reg
         
-        returns_MPC.append(self.evaluate_MPC(0, 1))
-        
         for ep in range(n_episodes):
-            state = self.env.reset()
-            done = False
             
-            self.model.reset()
+            plan_times = []
         
             if ep >= n_random_eps:
-                self.model.train_models(n_epochs_dyn = n_epochs_dyn, batch_size_dyn = 200,
-                                        n_epochs_reg = n_epochs_reg, batch_size_reg = 200)
+                self.model.train_models(n_epochs_dyn = n_epochs_dyn, batch_size_dyn = 256,
+                                        n_epochs_reg = n_epochs_reg, batch_size_reg = 256)
                 n_epochs_dyn = int(max(5, n_epochs_dyn * self.args.n_epoch_decay_dyn))
                 n_epochs_reg = int(max(5, n_epochs_reg * self.args.n_epoch_decay_reg))
-                returns_MPC.append(self.evaluate_MPC(ep, 1))
-            # self.evaluate_dynamics(ep, self.args.horizon)
-            
+                returns_MPC.append(self.evaluate_MPC(ep, 10))
+                # self.evaluate_dynamics(ep, [1,15], 300)
+                
+            state, info = self.env.reset(seed = self.seed)
+            done = False    
+            self.model.reset()
             for _ in range(self.args.ep_len):
-        
+                
                 if ep >= n_random_eps:
                     if self.args.use_TD3:
                         action = self.agent.act(state, train = True)
                     else:
-                        action = self.model.act(state, evaluation = False, noise_std = 0.1)
+                        plan_start = timer()
+                        action = self.model.act(state, evaluation = False)
+                        time_to_plan = timer() - plan_start
+                        plan_times.append(time_to_plan)
+                        # print(time_to_plan)
                 else:
                     action = self.agent.act(state, train = True) if self.args.TD3_init else self.env.action_space.sample()
                 
-                next_state, reward, done, _ = self.env.step(action)
-                self.model.save_transition(state, action, next_state)
+                next_state, reward, done, trunc, _ = self.env.step(action)
+                self.model.save_transition(state, action, next_state, reward)
                 
                 state = next_state
                 
-                if done:
+                if (done or trunc):
                     break
-        
-        np.save(os.path.join(self.output_dir, 'MPC_data'), np.array(returns_MPC))
-        # returns_MPC.append(self.evaluate_MPC("test", self.args.horizon))
+            # print(f'Mean planning time: {np.array(plan_times).mean()}')
+            
+        # self.evaluate_CEM()
+        np.save(os.path.join(self.output_dir, 'MPC_Performance_data'), np.array(returns_MPC))
 
 # for i in range(args.n_train_epochs):
 #     if 'Determ' in args.model:

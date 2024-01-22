@@ -15,8 +15,6 @@ parser.add_argument('--ep_len', type=int, default=200,
 parser.add_argument('--env_name', type=str, required=True,
                     help='Name of the environment')
 
-# parser.add_argument('--n_train_epochs', type=int, default=28,
-#                     help='Number of training epochs')
 
 # Dynamics hyperparameters
 parser.add_argument('--model', type=str, default='Determ', choices=['Determ', 'PETS'],
@@ -24,24 +22,24 @@ parser.add_argument('--model', type=str, default='Determ', choices=['Determ', 'P
 parser.add_argument('--n_epochs_dyn', type=int, default=200,
                     help='Number of training epochs per episode for dynamics')
 parser.add_argument('--n_epoch_decay_dyn', type=float, default=1.0,
-                    help='Decay factor of number of training epochs')
+                    help='Decay factor for number of training epochs')
 
 
 # Planning hyperparameters
 parser.add_argument('--horizon', type=int, default=10,
                         help='CEM planning horizon')
 parser.add_argument('--action_smooth', type=float, default=0.0,
-                        help='Action noise smoothing coefficient')
+                        help='Action smoothing coefficient')
 parser.add_argument('--regularization', type=str, default='None', choices=['None', 'DAE', 'DEEN', 'RND'],
                     help='Regularization method in planning')
 parser.add_argument('--n_epochs_reg', type=int, default=200,
                     help='Number of training epochs per episode for regularizer')
 parser.add_argument('--reg_noise_std', type=float, default=0.3,
-                    help='Std of gaussian noise added to inputs in regularization')
+                    help='Std of Gaussian noise added to inputs in regularization')
 parser.add_argument('--reg_alpha', type=float, default=0.001,
                     help='Penalty scaling term for regularization')
 parser.add_argument('--n_epoch_decay_reg', type=float, default=1.0,
-                    help='Decay factor of number of training epochs')
+                    help='Decay factor for number of training epochs')
 
 # Training loop hyperparameters
 parser.add_argument('--n_data_episodes', type=int, default=30,
@@ -79,16 +77,14 @@ if __name__ == '__main__':
                                   itertools.repeat(args.n_data_episodes, len(train_instances)),
                                   itertools.repeat(args.n_random_episodes, len(train_instances))))
     
-    # train_instance = RealAnt_Instance((seeds[0], args))
-    # train_instance.run_training(args.n_data_episodes, args.n_random_episodes)
-    
     if args.regularization == 'None':
         prepend_str = ''
     else:
         prepend_str = '_' + args.regularization
         
     output_dir = args.env_name + '_{}_horizon_{}_act_smooth_{}_dyn_epochs_{}_epoch_decay_{}'.format(args.model, args.horizon,
-                                                                         args.action_smooth, args.n_epochs_dyn, args.n_epoch_decay_dyn) + prepend_str
+                                                                         args.action_smooth, args.n_epochs_dyn, 
+                                                                         args.n_epoch_decay_dyn) + prepend_str
     if args.TD3_init:
         output_dir += '_TD3_init'
         
@@ -103,7 +99,7 @@ if __name__ == '__main__':
     f, ax = plt.subplots(figsize = (19.2, 10.8))
 
     for seed in seeds:
-        data = np.load(output_dir + f'/seed_{seed}/MPC_data.npy')
+        data = np.load(output_dir + f'/seed_{seed}/MPC_Performance_data.npy')
         returns.append(data)
     
     returns = np.stack(returns, axis = 1)
@@ -116,9 +112,9 @@ if __name__ == '__main__':
     
     ax.fill_between(episode_steps, mean_return + std_return, mean_return - std_return, alpha = 0.2)
     
-    ax.set_xlabel('Episode')
-    ax.set_ylabel('Return')
-    ax.grid(b = True)
+    ax.set_xlabel('Episode', fontsize = 22)
+    ax.set_ylabel('Return', fontsize = 22)
+    ax.grid(visible = True)
     f.tight_layout()
-    plt.legend()
+    plt.legend(fontsize = 22)
     plt.savefig(os.path.join(output_dir, 'Performance.pdf'))

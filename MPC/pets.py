@@ -22,7 +22,7 @@ def Swish(x):
 def trunc_initializer(size, std):
     trunc_norm = stats.truncnorm(-2, 2, loc = np.zeros(size), scale = np.ones(size))
     W = trunc_norm.rvs() * std
-    return torch.FloatTensor(W) #nn.Parameter(W.to(device))
+    return torch.FloatTensor(W)
 
 def shuffle_rows(arr):
     idxs = np.argsort(np.random.uniform(size=arr.shape), axis=-1)
@@ -43,54 +43,36 @@ class ProbNet(nn.Module):
                  env_spec):
         super().__init__()
         
-        # self.weights = []
-        # self.weights.append(trunc_initializer((ensemble_size, input_size, hidden_size), 1.0 / (2.0 * np.sqrt(input_size)), device))
-        # for _ in range(n_hidden_layers-1):
-        #     self.weights.append(trunc_initializer((ensemble_size, hidden_size, hidden_size), 1.0 / (2.0 * np.sqrt(hidden_size)), device))
-        # self.weights.append(trunc_initializer((ensemble_size, hidden_size, 2*output_size), 1.0 / (2.0 * np.sqrt(hidden_size)), device))
-        self.weights = [trunc_initializer((ensemble_size, input_size, hidden_size), 1.0 / (2.0 * np.sqrt(input_size))).to(device),
-                        trunc_initializer((ensemble_size, hidden_size, hidden_size), 1.0 / (2.0 * np.sqrt(hidden_size))).to(device),
-                        trunc_initializer((ensemble_size, hidden_size, hidden_size), 1.0 / (2.0 * np.sqrt(hidden_size))).to(device),
-                        trunc_initializer((ensemble_size, hidden_size, 2*output_size), 1.0 / (2.0 * np.sqrt(hidden_size))).to(device)]
-        for w in self.weights:
-            w.requires_grad = True
-        # self.biases = []
-        # self.act_funs = []
-        # for _ in range(n_hidden_layers):
-        #     self.biases.append(nn.Parameter(torch.zeros(ensemble_size, 1, hidden_size, device = device)))
-        #     self.act_funs.append(Swish)
-        # self.biases.append(nn.Parameter(torch.zeros(ensemble_size, 1, 2 * (output_size), device = device)))
-        # self.act_funs.append(nn.Sequential())
+        self.weights = nn.ParameterList()
+        self.weights.append(
+            trunc_initializer((ensemble_size, input_size, hidden_size), 1.0 / (2.0 * np.sqrt(input_size))))
+        for _ in range(n_hidden_layers):
+            self.weights.append(
+                trunc_initializer((ensemble_size, hidden_size, hidden_size), 1.0 / (2.0 * np.sqrt(hidden_size))))
+        self.weights.append(
+            trunc_initializer((ensemble_size, hidden_size, 2*output_size), 1.0 / (2.0 * np.sqrt(hidden_size))))
+        
+        self.biases = nn.ParameterList()
+        self.biases.append(torch.zeros(ensemble_size, 1, hidden_size))
+        self.act_funs = []
+        self.act_funs.append(Swish)
+        for _ in range(n_hidden_layers):
+            self.biases.append(torch.zeros(ensemble_size, 1, hidden_size))
+            self.act_funs.append(Swish)
+        self.biases.append(torch.zeros(ensemble_size, 1, 2 * (output_size)))
+        self.act_funs.append(nn.Sequential())
             
-        self.biases = [torch.zeros(ensemble_size, 1, hidden_size, requires_grad = True, device = device),
-                        torch.zeros(ensemble_size, 1, hidden_size, requires_grad = True, device = device),
-                        torch.zeros(ensemble_size, 1 ,hidden_size, requires_grad = True, device = device),
-                        torch.zeros(ensemble_size, 1, 2*(output_size), requires_grad = True, device = device)]
-                
-        self.act_funs = [Swish , Swish, Swish, nn.Sequential()]
+        self.max_log_var = nn.Parameter(torch.full((1, output_size), 0.5))
+        self.min_log_var = nn.Parameter(torch.full((1, output_size), -10.0))
         
-        # self.max_log_var = nn.Parameter(torch.full((1, output_size), 0.5,
-        #                              device = device))
-        # self.min_log_var = nn.Parameter(torch.full((1, output_size), -10.0,
-        #                             device = device))
+        self.mu = nn.Parameter(torch.zeros((input_size)), requires_grad = False)
+        self.sigma = nn.Parameter(torch.ones((input_size)), requires_grad = False)
         
-        self.max_log_var = torch.full((1, output_size), 0.5,
-                                     device = device, requires_grad = True)
-        self.min_log_var = torch.full((1, output_size), -10.0,
-                                    device = device, requires_grad = True)
-        
-        # self.mu = nn.Parameter(torch.zeros((1,input_size), device = device), requires_grad = False)
-        # self.sigma = nn.Parameter(torch.ones((1,input_size), device = device), requires_grad = False)
-        
-        self.mu = torch.zeros((input_size), device = device)
-        self.sigma = torch.zeros((input_size), device = device)
-
         self.input_size = input_size
         self.output_size = output_size
         
         self.device = device
         self.optim = optim.Adam(list(self.weights) + list(self.biases) + [self.max_log_var] + [self.min_log_var], lr = lr)
-        # self.optim = optim.Adam(self.parameters(), lr = lr)
         self.replay_buffer = deque(maxlen = replay_buffer_size)
         self.holdout_ratio = holdout_ratio
         self.ensemble_size = ensemble_size
@@ -98,6 +80,7 @@ class ProbNet(nn.Module):
         self.n_particles = n_particles
         
         self.env_spec = env_spec
+        
         
     def state_scaler(self, state):
         return (state - self.mu[:self.output_size])/self.sigma[:self.output_size]
@@ -143,7 +126,7 @@ class ProbNet(nn.Module):
         with torch.no_grad():
             mean, log_var = self.forward(state, act)
             
-        dist = Normal(mean,log_var.exp().sqrt())
+        dist = Normal(mean, log_var.exp().sqrt())
             
         next_state = dist.sample()
                
@@ -201,7 +184,7 @@ class ProbNet(nn.Module):
     
     #     return losses
     
-    def update_parameters(self, n_epochs = 5, batch_size = 32, 
+    def update_parameters(self, n_epochs = 5, batch_size = 256, 
                           max_epochs_since_improv = 20):
         
         # Shape: 0: Obs Index 1: Dim
@@ -218,12 +201,12 @@ class ProbNet(nn.Module):
         
         # train_set_ind, test_set_ind = train_test_perm[n_holdout:], train_test_perm[:n_holdout]
         
-        n_train = n #3train_set_ind.shape[0]
+        n_train = n #train_set_ind.shape[0]
         
         inputs = np.concatenate((self.env_spec.state_preproc(state_all), action_all), axis = 1)
         
-        mu = np.mean(inputs, axis = 0)#, keepdims = True)
-        sigma = np.std(inputs, axis = 0)#, keepdims = True)
+        mu = np.mean(inputs, axis = 0)
+        sigma = np.std(inputs, axis = 0)
         sigma[sigma < 1e-12] = 1.0
         
         self.mu.data = torch.FloatTensor(mu).to(self.device)
@@ -244,21 +227,23 @@ class ProbNet(nn.Module):
         # best_max_log_var = self.max_log_var.data
         # best_min_log_var = self.min_log_var.data
         # epochs_since_improv = 0
+        epoch_times = []
         for i_epoch in range(n_epochs):
             # if (epochs_since_improv > max_epochs_since_improv or i_epoch == n_epochs - 1):
-            #     for weight, best_w, bias, best_b in zip(self.weights, best_weights ,self.biases, best_biases):
+            #     for weight, best_w, bias, best_b in zip(self.weights, best_weights, self.biases, best_biases):
             #         weight.data.copy_(best_w)
             #         bias.data.copy_(best_b)
             #     self.max_log_var.data.copy_(best_max_log_var)
             #     self.min_log_var.data.copy_(best_min_log_var)
             #     #print('Terminated at epoch {}'.format(i_epoch))
             #     break
-            
+            start = timer()
             for batch_n in range(int(np.ceil(n_train / batch_size))):
                 
                 batch_ind = bootstrap_inds[:, batch_n * batch_size:(batch_n + 1) * batch_size]
                                 
-                state_batch, action_batch, next_state_batch = state_all[batch_ind, :], action_all[batch_ind, :], next_state_all[batch_ind, :]
+                state_batch, action_batch, next_state_batch = \
+                state_all[batch_ind, :], action_all[batch_ind, :], next_state_all[batch_ind, :]
                                                     
                 state_batch = torch.FloatTensor(state_batch).to(self.device)
                 action_batch = torch.FloatTensor(action_batch).to(self.device)
@@ -266,15 +251,15 @@ class ProbNet(nn.Module):
                                 
                 loss = 0.01 * torch.sum(self.max_log_var) - 0.01 * torch.sum(self.min_log_var)
                 
-                loss += self.get_decays()
+                #loss += self.get_decays()
                 
-                mean, log_var = self.forward(state_batch,action_batch)
+                mean, log_var = self.forward(state_batch, action_batch)
                 inv_var = torch.exp(-log_var)
                 
                 targets = self.env_spec.target_proc(self.state_scaler(state_batch),
                                                     self.state_scaler(next_state_batch))
                 
-                loss_log =  ((mean - targets) ** 2) * inv_var + log_var
+                loss_log = ((mean - targets) ** 2) * inv_var + log_var
                 
                 loss_log = loss_log.mean(-1).mean(-1).sum()
                 
@@ -283,9 +268,11 @@ class ProbNet(nn.Module):
                 self.optim.zero_grad()
                 loss.backward()
                 self.optim.step()
-            
+            time_to_epoch = timer() - start
+            epoch_times.append(time_to_epoch)
             bootstrap_inds = shuffle_rows(bootstrap_inds)
                 
+        # print(f'Mean epoch time: {np.array(epoch_times).mean()}')
             # current_holdout = self.evaluate_model(state_all, action_all, next_state_all, test_set_inds)
             # improv = (best_holdout - current_holdout)/best_holdout
             # updated = False
@@ -342,7 +329,7 @@ class PETS():
                  replay_buffer_size,
                  holdout_ratio,
                  n_particles,
-                 env_spec)
+                 env_spec).to(device)
         
         self.ensemble_size = ensemble_size
                 
@@ -406,7 +393,7 @@ class PETS():
         
         self.prob_net.load_state_dict(model)
         
-    def cem_iteration(self, observation,  mean, var, return_rewards = False):
+    def cem_iteration(self, observation, mean, var, return_rewards = False):
                 
         # Each action sequence has n_particles trajectories
         
@@ -478,7 +465,7 @@ class PETS():
                                   True)
         return mean, var, returns
     
-    def act(self, observation, evaluation = False):
+    def act(self, observation, evaluation = False, noise_std = 0.1):
         
         # start = timer()
         

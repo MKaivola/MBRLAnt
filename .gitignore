@@ -129,5 +129,4 @@ dmypy.json
 
 *.pdf
 PETS*
-MPC/RealAntMujoco*/**
-Model_NPG/RealAntMujoco*/**
+**/RealAntMujoco*/**
